@@ -1,0 +1,8 @@
+.DS_Store
+.envrc
+.build/
+.swiftpm/
+dist/
+*.xcodeproj
+DerivedData/
+.work/
