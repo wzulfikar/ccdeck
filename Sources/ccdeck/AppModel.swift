@@ -27,8 +27,9 @@ final class AppModel {
     let threshold: Double = 90
 
     // Keep-awake (caffeinate -i equivalent). Not persisted — resets on launch.
-    private let caffeine = Caffeine()
-    private(set) var stayAwake = false
+    private let stayAwake = StayAwake()
+    private let clamshell = ClamshellMonitor()
+    private(set) var shouldStayAwake = false
 
     private let store: Store
     private var timer: Timer?
@@ -66,7 +67,43 @@ final class AppModel {
     // MARK: - Keep-awake
 
     func toggleStayAwake() {
-        stayAwake = caffeine.toggle()
+        let target = !shouldStayAwake
+        shouldStayAwake = target
+        // Power assertion handles idle sleep instantly, no privileges needed.
+        if target {
+            stayAwake.start()
+            // While awake, power the internal panel off whenever the lid shuts —
+            // the system keeps running (disablesleep), only the display sleeps.
+            clamshell.onLidClosed = { DisplayControl.sleepNow() }
+            clamshell.start()
+        } else {
+            stayAwake.stop()
+            clamshell.stop()
+        }
+        statusMessage = ""
+        // The privileged helper adds lid-close-on-battery suppression via pmset.
+        Task {
+            do {
+                try await HelperManager.shared.setDisableSleep(target)
+            } catch HelperError.needsApproval {
+                statusMessage = "Approve “CC Deck” in System Settings ▸ Login Items, then toggle again to stay awake with the lid closed."
+            } catch {
+                statusMessage = "Lid-close keep-awake unavailable (\(error.localizedDescription)). Idle sleep still blocked; keep the lid open."
+            }
+        }
+    }
+
+    /// Fully remove the privileged helper: clear sleep suppression, then
+    /// unregister the daemon (drops it from System Settings ▸ Login Items).
+    func removeStayAwakeHelper() {
+        shouldStayAwake = false
+        stayAwake.stop()
+        clamshell.stop()
+        Task {
+            try? await HelperManager.shared.setDisableSleep(false)
+            HelperManager.shared.unregister()
+            statusMessage = "Keep-awake helper removed."
+        }
     }
 
     // MARK: - Polling
@@ -240,7 +277,7 @@ final class AppModel {
             accounts = store.listAccounts()
             activeEmail = profile.email
             store.setSetting("activeEmail", profile.email)
-            statusMessage = "Captured: \(profile.email)"
+            statusMessage = "Login captured: \(profile.email)"
             await refresh(account)
         } catch {
             statusMessage = "Capture failed (couldn't read profile): \(error)"
@@ -279,15 +316,13 @@ final class AppModel {
         return "\(Int(max(u.fiveHourPct, u.sevenDayPct)))%"
     }
 
-    /// Minutes until the soonest 5-hour window resets, but only when that's within
-    /// 5 minutes — used as a transient menu-bar hint. nil otherwise.
+    /// Minutes until the soonest upcoming reset (either window, any account), but only
+    /// when that's within 5 minutes — used as a transient menu-bar hint. nil otherwise.
+    /// Uses the same source as `nextReset` so the menu-bar and window agree.
     var soonestResetMinutes: Int? {
-        let now = Date()
-        let secs = accounts
-            .compactMap { usageByEmail[$0.email]?.fiveHourResets?.timeIntervalSince(now) }
-            .filter { $0 > 0 && $0 <= 5 * 60 }
-            .min()
-        guard let secs else { return nil }
+        guard let next = nextReset else { return nil }
+        let secs = next.date.timeIntervalSince(Date())
+        guard secs > 0 && secs <= 5 * 60 else { return nil }
         return max(1, Int(ceil(secs / 60)))
     }
 
@@ -305,15 +340,12 @@ final class AppModel {
         return best
     }
 
-    /// Menu-bar icon tint, or nil for the default (template white) when usage is safe.
+    /// Menu-bar icon + text tint. Orange once the displayed % (active account's worst
+    /// window, matching `menuTitle`) hits 70%; never red — red in the menu bar is too
+    /// distracting. nil = default template white when usage is safe.
     var menuIconColor: NSColor? {
-        let c = combined
-        guard c.hasData else { return nil }
-        switch c.fiveHourLevel {
-        case .full:   return .systemRed
-        case .warn:   return .systemOrange
-        case .normal: return nil
-        }
+        guard let email = activeEmail, let u = usageByEmail[email] else { return nil }
+        return max(u.fiveHourPct, u.sevenDayPct) >= 70 ? .systemOrange : nil
     }
 
     func label(for email: String) -> String {

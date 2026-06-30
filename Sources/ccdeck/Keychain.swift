@@ -9,11 +9,11 @@ enum KeychainError: Error { case status(OSStatus) }
 ///   - `officialService` ("Claude Code-credentials"): the live entry Claude Code reads.
 ///     Activating an account == writing that account's blob here. The account name on
 ///     this item is the macOS short username (matches what Claude Code writes).
-///   - `appService` ("ccswitch"): our private store, one item per managed account,
+///   - `appService` ("ccdeck"): our private store, one item per managed account,
 ///     keyed by the account email.
 enum Keychain {
     static let officialService = "Claude Code-credentials"
-    static let appService = "ccswitch"
+    static let appService = "ccdeck"
     static var officialAccount: String { NSUserName() }
 
     // MARK: - Primitives

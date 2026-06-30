@@ -1,4 +1,4 @@
-# ccswitch
+# ccdeck
 
 macOS menu bar app that juggles **multiple Claude (claude.ai) subscriptions** for Claude Code.
 See live quota for every account, switch between them in one click, and auto-rotate to a
@@ -21,8 +21,8 @@ fresh account when the current one hits its limit.
 ## How it works
 
 Claude Code stores its OAuth token in the macOS Keychain under the service
-`Claude Code-credentials`. ccswitch keeps a copy of each account's credential blob under
-its own Keychain service (`ccswitch`) and, to "activate" an account, copies that blob into
+`Claude Code-credentials`. ccdeck keeps a copy of each account's credential blob under
+its own Keychain service (`ccdeck`) and, to "activate" an account, copies that blob into
 the official entry. Quota polling reads each account's stored token directly — it never has
 to switch accounts to read usage.
 
@@ -37,7 +37,7 @@ for the account identity), authenticated with the account's OAuth access token.
   mid-burn.
 - **Keychain access prompts — and "Always Allow" only sticks with a stable signature.**
   The official `Claude Code-credentials` item is owned by the Claude Code binary, so the
-  first time ccswitch reads/writes it macOS asks for permission. _Always Allow_ pins the
+  first time ccdeck reads/writes it macOS asks for permission. _Always Allow_ pins the
   grant to the app's **code-signing identity** — so it only persists if the app is signed
   with a **stable** identity. An ad-hoc signature (the script's default) changes on every
   build, so macOS re-prompts each launch. Build with a real identity to make it stick:
@@ -58,7 +58,7 @@ for the account identity), authenticated with the account's OAuth access token.
 
 ```sh
 swift build
-swift run ccswitch
+swift run ccdeck
 ```
 
 Requires macOS 14+ and a Swift 6 toolchain.

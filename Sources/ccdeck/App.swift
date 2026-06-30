@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct CCSwitchtApp: App {
+struct CCDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -16,7 +16,7 @@ struct CCSwitchtApp: App {
 /// MenuBarExtra) so we can: keep a Dock icon, open the popover programmatically on
 /// launch, and reopen it when the Dock icon is clicked.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let model = AppModel.shared
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.target = self
 
         popover.behavior = .transient
+        popover.delegate = self
         let host = NSHostingController(rootView: MenuView(model: model))
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
@@ -67,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController?.view.window?.makeKey()
     }
 
+    /// The status message is transient flash feedback (e.g. "Captured: …"),
+    /// so wipe it when the popover closes — it shouldn't linger on reopen.
+    nonisolated func popoverDidClose(_ notification: Notification) {
+        Task { @MainActor in model.statusMessage = "" }
+    }
+
     // MARK: - Status icon
 
     /// Re-render the status button whenever any observable it reads changes.
@@ -80,8 +87,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyStatusButton() {
         guard let button = statusItem.button else { return }
-        var title = model.showUsageInMenuBar ? model.menuTitle : ""
-        if let mins = model.soonestResetMinutes { title += "  \(mins) min" }
+        // When a reset is imminent the countdown takes over the slot — the usage %
+        // is dropped so it's just "N min", no "60% 4 min" clutter.
+        var title: String
+        if let mins = model.soonestResetMinutes {
+            title = "\(mins) min"
+        } else {
+            title = model.showUsageInMenuBar ? model.menuTitle : ""
+        }
 
         // Render gauge + title into ONE template image and let the menu-bar machinery
         // recolor it. This is the only reliable path: an SF-Symbol template image
@@ -91,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // dark-on-dark. Baking the text into the same template makes it follow the icon.
         button.image = statusImage(title: title)
         button.imagePosition = .imageOnly
-        // nil → bar auto-colors (white on dark / black on light); warn/full stamp orange/red.
+        // nil → bar auto-colors (white on dark / black on light); ≥70% stamps orange.
         button.contentTintColor = model.menuIconColor
     }
 
@@ -102,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let font = NSFont.menuBarFont(ofSize: 0)
         let symbolCfg = NSImage.SymbolConfiguration(pointSize: font.pointSize + 2, weight: .regular)
         let symbol = (NSImage(systemSymbolName: "gauge.with.dots.needle.50percent",
-                              accessibilityDescription: "ccswitch")?
+                              accessibilityDescription: "CC Deck")?
             .withSymbolConfiguration(symbolCfg) ?? NSImage())
         let symbolSize = symbol.size
 

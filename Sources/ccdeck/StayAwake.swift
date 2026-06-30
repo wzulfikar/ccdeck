@@ -6,13 +6,13 @@ import IOKit.pwr_mgt
 /// system from sleeping even when the lid is closed (clamshell), including on
 /// battery. The display may still sleep. Releasing the assertion (or quitting)
 /// restores normal sleep.
-final class Caffeine {
+final class StayAwake {
     private var assertionID: IOPMAssertionID = 0
     private(set) var isActive = false
 
     /// Begin keeping the system awake. No-op if already active.
     @discardableResult
-    func start(reason: String = "ccswitch keep-awake") -> Bool {
+    func start(reason: String = "ccdeck keep-awake") -> Bool {
         guard !isActive else { return true }
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventSystemSleep as CFString,

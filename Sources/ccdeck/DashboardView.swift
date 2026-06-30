@@ -11,7 +11,7 @@ struct DashboardView: View {
                 Image(systemName: "gauge.with.dots.needle.50percent")
                     .font(.title2)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("ccswitch is running").font(.headline)
+                    Text("CC Deck is running").font(.headline)
                     Text("Lives in the menu bar (top right). Close this window anytime — it keeps running.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

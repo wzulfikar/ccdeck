@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build, sign, notarize, and publish a ccswitch release.
+# Build, sign, notarize, and publish a ccdeck release.
 #
 # Usage:
 #   ./scripts/release.sh v0.1.0        # tag/version for the GitHub release
@@ -18,7 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="ccswitch"
+APP_NAME="ccdeck"
 TEAM_ID="KY6TQ4484U"
 IDENTITY="Developer ID Application: Klu Technologies Oy (${TEAM_ID})"
 VERSION="${1:?usage: release.sh <version> [--no-publish], e.g. release.sh v0.1.0}"

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Coarse "time until reset" label. Shows only the largest unit: days (no hours),
 /// hours (no minutes), or minutes (no seconds) — e.g. "4 days", "23 hrs", "26 min".
@@ -26,6 +27,8 @@ struct MenuView: View {
     @Bindable var model: AppModel
     @State private var hoveredEmail: String?
     @State private var pendingDelete: Account?
+    @State private var copiedEmail: String?
+    @State private var statusCopied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -52,7 +55,7 @@ struct MenuView: View {
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { acct in
-            Text("\(acct.label) (\(acct.email)) will be removed from ccswitch.")
+            Text("\(acct.label) (\(acct.email)) will be removed from CC Deck.")
         }
     }
 
@@ -121,9 +124,12 @@ struct MenuView: View {
                 .frame(width: 7, height: 7)
             Text(acct.label).font(.callout).lineLimit(1)
 
-            // Inactive accounts show when their soonest window resets here (always
-            // muted); the active account shows it inline on each meter instead.
-            if !isActive, let reset = model.usageByEmail[acct.email]?.soonestReset() {
+            // Inactive accounts show their reset here (always muted); the active
+            // account shows it inline on each meter instead. Normally this is the
+            // 5h reset (hidden when the idle window has no resets_at), but a weekly-
+            // exhausted account shows its 7-day reset instead — that's what gates it.
+            if !isActive, let u = model.usageByEmail[acct.email],
+               let reset = u.sevenDayPct >= 100 ? u.sevenDayResets : u.fiveHourResets {
                 Text("reset in \(relativeReset(reset))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -141,12 +147,20 @@ struct MenuView: View {
             if isActive {
                 // Active account shows its email here (where the % would be); the
                 // per-window percentages live in the inline meters just below.
-                Text(acct.email)
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                // Click to copy — flashes "email copied ✓" for 2s.
+                Text(copiedEmail == acct.email ? "email copied ✓" : acct.email)
+                    .font(.caption2)
+                    .foregroundStyle(copiedEmail == acct.email ? Color.green : Color.secondary)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture { copyEmail(acct.email) }
             } else if let u = model.usageByEmail[acct.email] {
-                Text("\(Int(max(u.fiveHourPct, u.sevenDayPct)))%")
+                // Weekly-exhausted accounts read 100% (orange); otherwise 5h usage,
+                // which an idle window reads as 0%. Pairs with the reset above.
+                let weeklyExceeded = u.sevenDayPct >= 100
+                Text("\(weeklyExceeded ? 100 : Int(u.fiveHourPct))%")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(u.isExhausted(threshold: model.threshold) ? .orange : .secondary)
+                    .foregroundStyle(weeklyExceeded || u.fiveHourPct >= model.threshold ? .orange : .secondary)
             } else if let err = model.errorByEmail[acct.email] {
                 Text(err).font(.caption2).foregroundStyle(.orange)
             }
@@ -160,6 +174,30 @@ struct MenuView: View {
         .contentShape(Rectangle())
         .onHover { inside in
             hoveredEmail = inside ? acct.email : (hoveredEmail == acct.email ? nil : hoveredEmail)
+        }
+    }
+
+    /// Copy the email to the clipboard and flash "email copied ✓" for 2s.
+    private func copyEmail(_ email: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(email, forType: .string)
+        copiedEmail = email
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copiedEmail == email { copiedEmail = nil }
+        }
+    }
+
+    /// Copy the status message to the clipboard and flash "Message copied ✓" for 2s.
+    private func copyStatus() {
+        let msg = model.statusMessage
+        guard !msg.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(msg, forType: .string)
+        statusCopied = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            statusCopied = false
         }
     }
 
@@ -196,7 +234,7 @@ struct MenuView: View {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
                 if let next = model.nextReset {
-                    Text("Next reset in \(relativeReset(next.date)) (\(next.account))")
+                    Text("Next reset: in \(relativeReset(next.date)) (\(next.account))")
                         .font(.caption2)
                         .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
                 }
@@ -213,18 +251,26 @@ struct MenuView: View {
             settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
 
+            // Informational status sits on its own line above the buttons
+            // (e.g. "Switched to …"). Space is reserved even when empty so the
+            // label appearing/disappearing causes no layout shift.
+            Text(statusCopied ? "Message copied ✓" : model.statusMessage)
+                .font(.caption2)
+                .foregroundStyle(statusCopied ? Color.green : Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: 12, alignment: .leading)
+                .padding(.top, 4)
+                .contentShape(Rectangle())
+                .help(model.statusMessage.isEmpty ? "" : "Click to copy")
+                .onTapGesture { copyStatus() }
+
             HStack(spacing: 8) {
                 Button("Get current login") {
                     Task { await model.captureCurrentLogin() }
                 }
                 if model.isAwaitingLogin {
                     ProgressView().controlSize(.small)
-                }
-                if !model.statusMessage.isEmpty {
-                    Text(model.statusMessage)
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
             }
             .font(.caption)
@@ -235,10 +281,13 @@ struct MenuView: View {
                 }
                 .help("Refresh now")
                 Button { model.toggleStayAwake() } label: {
-                    Text(model.stayAwake ? "Stay awake ✓" : "Stay awake")
-                        .foregroundStyle(model.stayAwake ? Color.orange : Color.primary)
+                    Text(model.shouldStayAwake ? "Stay awake ✓" : "Stay awake")
+                        .foregroundStyle(model.shouldStayAwake ? Color.orange : Color.primary)
                 }
-                .help(model.stayAwake ? "Stay awake: on — click to allow sleep" : "Stay awake: off — keep Mac awake")
+                .help(model.shouldStayAwake ? "Stay awake: on — click to allow sleep" : "Stay awake: off — keep Mac awake")
+                .contextMenu {
+                    Button("Remove keep-awake helper…") { model.removeStayAwakeHelper() }
+                }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q", modifiers: .command)
@@ -274,6 +323,12 @@ private struct GaugeRow: View {
     // capacity's total lives in the section header instead of every row.
     private var valueText: String { "\(Int(value))%" }
 
+    // Bar: red only when fully depleted, orange from 70% on, accent below. Text never
+    // goes red (distracting) — just orange once it crosses 70%. Thresholds use
+    // `fraction` so combined capacity (total > 100) bands by share-of-capacity, not raw %.
+    private var barColor: Color { fraction >= 1.0 ? .red : (fraction >= 0.7 ? .orange : .accentColor) }
+    private var textColor: Color { fraction >= 0.7 ? .orange : .primary }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
@@ -283,14 +338,14 @@ private struct GaugeRow: View {
                     Text("reset in \(relativeReset(reset))")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
-                Text(valueText).font(.caption.monospacedDigit())
+                Text(valueText).font(.caption.monospacedDigit()).foregroundStyle(textColor)
                 if let reset, !resetLeading {
                     Text("· resets \(relativeReset(reset))")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
             ProgressView(value: min(value, total), total: max(total, 1))
-                .tint(fraction >= 0.9 ? .red : (fraction >= 0.7 ? .orange : .accentColor))
+                .tint(barColor)
         }
     }
 }

@@ -12,9 +12,9 @@ final class Store {
     static let dbURL: URL = {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ccswitch", isDirectory: true)
+            .appendingPathComponent("ccdeck", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("ccswitch.sqlite")
+        return base.appendingPathComponent("ccdeck.sqlite")
     }()
 
     init() {
