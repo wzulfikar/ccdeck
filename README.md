@@ -28,8 +28,8 @@ fresh account when the current one hits its limit.
 
 **Preview**
 
-| Idle | Usage >70% | Stay awake | Show usage % |
-| :-: | :-: | :-: | :-: |
+|                 Idle                  |                   Usage >70%                    |                 Stay awake                  |                 Show usage %                  |
+| :-----------------------------------: | :---------------------------------------------: | :-----------------------------------------: | :-------------------------------------------: |
 | ![Idle](docs/screenshots/ccdeck1.png) | ![Usage over 70%](docs/screenshots/ccdeck2.png) | ![Stay awake](docs/screenshots/ccdeck4.png) | ![Show usage %](docs/screenshots/ccdeck3.png) |
 
 ## How it works
@@ -43,7 +43,7 @@ to switch accounts to read usage.
 Quota comes from `GET https://api.anthropic.com/api/oauth/usage` (and `/api/oauth/profile`
 for the account identity), authenticated with the account's OAuth access token.
 
-## Important limitations
+## Limitations
 
 - **Switching affects new sessions only.** A running `claude` process already holds its
   token in memory; swapping the Keychain entry changes which account the _next_ launch uses.
