@@ -76,16 +76,18 @@ for the account identity), authenticated with the account's OAuth access token.
 no warning. Stable direct link:
 
 ```
-https://github.com/wzulfikar/ccdeck/releases/latest/download/ccdeck.dmg
+https://github.com/wzulfikar/ccdeck/releases/latest
 ```
 
 **Homebrew**
 
 ```sh
-brew install <your-tap>/ccdeck   # TODO: replace with the real tap once published
+brew install --cask wzulfikar/tap/ccdeck
 ```
 
 Requires macOS 14+.
+
+---
 
 ## Build from source
 
