@@ -257,7 +257,7 @@ struct MenuView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(weeklyExceeded || u.fiveHourPct >= model.threshold ? .orange : .secondary)
             } else if let err = model.errorByEmail[acct.email] {
-                // Passive error text (e.g. "… — Retrying…"). Unlike the active account,
+                // Passive error text (e.g. "…. Retrying…"). Unlike the active account,
                 // more-accounts rows don't swap in "Click to retry now." on hover — the
                 // hover slot here belongs to the Switch button. Tap still retries.
                 let retrying = model.isAutoRetrying(email: acct.email)
@@ -314,7 +314,7 @@ struct MenuView: View {
             GaugeRow(title: "7-day", value: u.sevenDayPct, total: 100,
                      reset: u.sevenDayResets, resetLeading: true)
         } else if let err = model.errorByEmail[acct.email] {
-            // While auto-retrying, show the "… — Retrying…" text as-is (no manual affordance);
+            // While auto-retrying, show the "…. Retrying…" text as-is (no manual affordance);
             // on hover, swap the tail for "Click to retry now." Once it's given up, fall back
             // to the plain tappable "… Click to retry." error.
             let retrying = model.isAutoRetrying(email: acct.email)

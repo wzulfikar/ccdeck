@@ -16,15 +16,15 @@ enum RetryPolicy {
     }
 
     /// The label shown while waiting to retry: the failure reason plus a "Retrying…" tail —
-    /// e.g. `Fetch failed (429) — Retrying…`. Once retries are exhausted the caller drops
+    /// e.g. `Fetch failed (429). Retrying…`. Once retries are exhausted the caller drops
     /// the tail and leaves the bare error so it reads as a final, tappable state.
     static func retryingMessage(base: String) -> String {
-        "\(base) — Retrying…"
+        "\(base). Retrying…"
     }
 
     /// Hovering a still-retrying row offers to jump the queue: swap the passive "Retrying…"
     /// tail for a "Click to retry now." call to action — e.g.
-    /// `Fetch failed (429) — Retrying…` → `Fetch failed (429) — Click to retry now.`.
+    /// `Fetch failed (429). Retrying…` → `Fetch failed (429). Click to retry now.`.
     static func hoverMessage(_ message: String) -> String {
         message.replacingOccurrences(of: "Retrying…", with: "Click to retry now.")
     }

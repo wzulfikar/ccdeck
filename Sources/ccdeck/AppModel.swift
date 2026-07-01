@@ -102,7 +102,7 @@ final class AppModel {
     }
 
     /// First-load fetch for one account: retry on a fixed interval up to `RetryPolicy`'s cap,
-    /// showing "… — Retrying…" between tries, then leave a bare (tappable) error if it never
+    /// showing "…. Retrying…" between tries, then leave a bare (tappable) error if it never
     /// succeeds. `loadingEmails` marks it as loading throughout so the menu bar pulses.
     private func scheduleInitialLoad(_ account: Account) {
         let email = account.email
@@ -555,7 +555,7 @@ final class AppModel {
     }
 
     /// True while an auto-retry loop is still live for this account (see `RetryPolicy`), so
-    /// the UI can show "… — Retrying…" and suppress the manual "Click to retry" affordance.
+    /// the UI can show "…. Retrying…" and suppress the manual "Click to retry" affordance.
     func isAutoRetrying(email: String) -> Bool { retryTasks[email] != nil }
 
     /// True while the active account's first fetch is still in flight with no data yet —
