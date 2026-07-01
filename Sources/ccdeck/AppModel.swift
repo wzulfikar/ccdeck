@@ -47,7 +47,7 @@ final class AppModel {
         let store = Store()
         self.store = store
         self.autoSwitchEnabled = store.getSetting("autoSwitch") == "1"
-        self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") != "0"  // default on
+        self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") == "1"  // default off
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
         detectActiveFromKeychain()
@@ -452,16 +452,17 @@ final class AppModel {
         return best
     }
 
-    /// Menu-bar icon + text tint. Orange once the displayed % (active account's worst
-    /// window, matching `menuTitle`) hits 70%; never red — red in the menu bar is too
-    /// distracting. nil = default template white when usage is safe. Concrete sRGB, not
-    /// dynamic `.systemOrange`: this gets baked into the icon pixels, and a catalog color
-    /// resolves against the status button's (lying .aqua) appearance and comes out dark.
+    /// Menu-bar icon + text tint keyed on the displayed % (active account's worst window,
+    /// matching `menuTitle`): orange from 70%, red at 100%, nil (template white/black)
+    /// below. Concrete sRGB, not dynamic `.systemOrange`/`.systemRed`: this gets baked
+    /// into the icon pixels, and a catalog color resolves against the status button's
+    /// (lying .aqua) appearance and comes out dark.
     var menuIconColor: NSColor? {
         guard let email = activeEmail, let u = usageByEmail[email] else { return nil }
-        return max(u.fiveHourPct, u.sevenDayPct) >= 70
-            ? NSColor(srgbRed: 1.0, green: 0.584, blue: 0.0, alpha: 1)  // ~systemOrange
-            : nil
+        let pct = max(u.fiveHourPct, u.sevenDayPct)
+        if pct >= 100 { return NSColor(srgbRed: 1.0, green: 0.231, blue: 0.188, alpha: 1) }  // ~systemRed
+        if pct >= 70 { return NSColor(srgbRed: 1.0, green: 0.584, blue: 0.0, alpha: 1) }      // ~systemOrange
+        return nil
     }
 
     func label(for email: String) -> String {
