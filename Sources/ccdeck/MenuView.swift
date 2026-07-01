@@ -23,6 +23,16 @@ func isResetUrgent(_ date: Date, now: Date = Date()) -> Bool {
     return secs > 0 && secs < 3600
 }
 
+/// "Next reset: in … (Name)" plus a "Weekly reset in … (Name)." tail when a distinct
+/// 7-day reset exists (skipped when the soonest reset is already the weekly one).
+func resetLine(next: (date: Date, account: String), weekly: (date: Date, account: String)?) -> String {
+    var line = "Next reset: in \(relativeReset(next.date)) (\(next.account))"
+    if let weekly, weekly.date != next.date {
+        line += ". Weekly reset in \(relativeReset(weekly.date)) (\(weekly.account))."
+    }
+    return line
+}
+
 struct MenuView: View {
     @Bindable var model: AppModel
     @State private var hoveredEmail: String?
@@ -273,7 +283,7 @@ struct MenuView: View {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
                 if let next = model.nextReset {
-                    Text("Next reset: in \(relativeReset(next.date)) (\(next.account))")
+                    Text(resetLine(next: next, weekly: model.nextWeeklyReset))
                         .font(.caption2)
                         .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
                 }

@@ -35,5 +35,12 @@ let package = Package(
                 ])
             ]
         ),
+        // Unit tests for the pure presentation/model logic (no AppKit UI, SQLite, or
+        // Keychain touched). Runs headless via `swift test`.
+        .testTarget(
+            name: "ccdeckTests",
+            dependencies: ["ccdeck"],
+            path: "Tests/ccdeckTests"
+        ),
     ]
 )

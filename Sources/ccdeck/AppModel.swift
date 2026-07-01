@@ -212,7 +212,7 @@ final class AppModel {
             }
             activeEmail = email
             store.setSetting("activeEmail", email)
-            statusMessage = "Switched to \(label(for: email)) — \(reason). New sessions only."
+            statusMessage = "Switched to \(label(for: email)). Applies to new sessions."
         } catch {
             statusMessage = "Switch failed: \(error)"
         }
@@ -409,33 +409,26 @@ final class AppModel {
         )
     }
 
-    /// Compact menu-bar label: active account's worst window %, or a dash if unknown.
-    var menuTitle: String {
-        guard let email = activeEmail, let u = usageByEmail[email] else { return "—" }
-        return "\(Int(max(u.fiveHourPct, u.sevenDayPct)))%"
+    /// The composed menu-bar presentation (title + gauge on the 5-hour burn, color on the
+    /// worst window). Single wiring point — see `MenuBarStyle.presentation`.
+    private var menuBarPresentation: MenuBarStyle.Presentation {
+        let u = activeEmail.flatMap { usageByEmail[$0] }
+        return MenuBarStyle.presentation(fiveHourPct: u?.fiveHourPct, sevenDayPct: u?.sevenDayPct,
+                                         showUsage: showUsageInMenuBar, stayAwake: shouldStayAwake)
     }
 
-    /// SF Symbol gauge whose needle reflects usage (active account's worst window),
-    /// bucketed to the needle variants Apple ships. Used for the menu-bar icon when the %
-    /// text is hidden, so the icon alone conveys usage at a glance — a full gauge means
-    /// heavy usage. Falls back to the 50% glyph when usage is unknown.
-    var usageGaugeSymbol: String {
-        guard let email = activeEmail, let u = usageByEmail[email] else {
-            return "gauge.with.dots.needle.50percent"
-        }
-        let used = min(100, max(0, max(u.fiveHourPct, u.sevenDayPct)))
-        let nearest = [0, 33, 50, 67, 100].min { abs(Double($0) - used) < abs(Double($1) - used) }!
-        return "gauge.with.dots.needle.\(nearest)percent"
-    }
+    /// Compact menu-bar label: active account's 5-hour %, or a dash if unknown.
+    var menuTitle: String { menuBarPresentation.title }
+
+    /// SF Symbol gauge for the menu-bar icon, keyed on the 5-hour window.
+    var usageGaugeSymbol: String { menuBarPresentation.gaugeSymbol }
 
     /// Minutes until the soonest upcoming reset (either window, any account), but only
     /// when that's within 5 minutes — used as a transient menu-bar hint. nil otherwise.
     /// Uses the same source as `nextReset` so the menu-bar and window agree.
     var soonestResetMinutes: Int? {
         guard let next = nextReset else { return nil }
-        let secs = next.date.timeIntervalSince(Date())
-        guard secs > 0 && secs <= 5 * 60 else { return nil }
-        return max(1, Int(ceil(secs / 60)))
+        return MenuBarStyle.resetCountdownMinutes(secondsUntilReset: next.date.timeIntervalSince(Date()))
     }
 
     /// Soonest upcoming reset across every account (either window), tagged with the
@@ -452,18 +445,23 @@ final class AppModel {
         return best
     }
 
-    /// Menu-bar icon + text tint keyed on the displayed % (active account's worst window,
-    /// matching `menuTitle`): orange from 70%, red at 100%, nil (template white/black)
-    /// below. Concrete sRGB, not dynamic `.systemOrange`/`.systemRed`: this gets baked
-    /// into the icon pixels, and a catalog color resolves against the status button's
-    /// (lying .aqua) appearance and comes out dark.
-    var menuIconColor: NSColor? {
-        guard let email = activeEmail, let u = usageByEmail[email] else { return nil }
-        let pct = max(u.fiveHourPct, u.sevenDayPct)
-        if pct >= 100 { return NSColor(srgbRed: 1.0, green: 0.231, blue: 0.188, alpha: 1) }  // ~systemRed
-        if pct >= 70 { return NSColor(srgbRed: 1.0, green: 0.584, blue: 0.0, alpha: 1) }      // ~systemOrange
-        return nil
+    /// Soonest upcoming 7-day (weekly) reset across every account, tagged with the owning
+    /// account — for the "Weekly reset in … (Name)" hint under combined capacity.
+    var nextWeeklyReset: (date: Date, account: String)? {
+        let now = Date()
+        var best: (date: Date, account: String)?
+        for acct in accounts {
+            guard let u = usageByEmail[acct.email], let d = u.sevenDayResets, d > now else { continue }
+            if best == nil || d < best!.date { best = (d, acct.label) }
+        }
+        return best
     }
+
+    /// Menu-bar icon + text color, keyed on the *worst* window so it warns on whichever
+    /// limit binds first: orange from 70%, red at 100% (a hard stop from either the 5-hour
+    /// or 7-day window), purple while stay-awake is on (overrides usage), nil otherwise.
+    /// The title/gauge stay on the 5-hour burn — only the color reflects the 7-day cap.
+    var menuIconColor: NSColor? { menuBarPresentation.color }
 
     func label(for email: String) -> String {
         accounts.first(where: { $0.email == email })?.label ?? email

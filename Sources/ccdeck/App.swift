@@ -103,19 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         // Render gauge + title into ONE image. Any non-white color (purple for keep-awake,
-        // orange at ≥70%) is BAKED into the pixels as a non-template image; only the plain
-        // white/safe state is a template the bar auto-recolors. We never tint via
-        // contentTintColor — on this status button an explicit tint (dynamic OR concrete)
-        // resolves dark-on-dark; baking sidesteps that entirely. Keep-awake wins over the
-        // usage color.
-        let bakedColor: NSColor? = model.shouldStayAwake
-            ? NSColor(srgbRed: 0.686, green: 0.322, blue: 0.871, alpha: 1)  // ~systemPurple
-            : model.menuIconColor                                          // orange ≥70%, else nil
-        // With the % text shown, the gauge is decorative (static 50%); with it hidden, the
-        // needle itself conveys remaining usage so the bare icon is readable.
-        let symbolName = model.showUsageInMenuBar ? "gauge.with.dots.needle.50percent"
-                                                  : model.usageGaugeSymbol
-        button.image = statusImage(title: title, bakedColor: bakedColor, symbolName: symbolName)
+        // orange at ≥70%, red at 100%) is BAKED into the pixels as a non-template image;
+        // only the plain white/safe state is a template the bar auto-recolors. We never tint
+        // via contentTintColor — on this status button an explicit tint (dynamic OR concrete)
+        // resolves dark-on-dark; baking sidesteps that entirely. Color + gauge come straight
+        // from the model, which delegates to `MenuBarStyle` (see docs/menubar-states.md).
+        button.image = statusImage(title: title,
+                                   bakedColor: model.menuIconColor,
+                                   symbolName: model.usageGaugeSymbol)
         button.imagePosition = .imageOnly
         button.contentTintColor = nil
     }
