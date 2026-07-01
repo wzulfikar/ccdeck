@@ -113,6 +113,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                                    symbolName: model.usageGaugeSymbol)
         button.imagePosition = .imageOnly
         button.contentTintColor = nil
+        updatePulse(button)
+    }
+
+    /// Pulse the status icon (opacity 1 ↔ 0.35) while the active account's first fetch is
+    /// still loading, so the empty 0% gauge reads as "fetching" rather than "0% used".
+    /// Driven from `applyStatusButton`, which re-runs whenever `menuBarIsLoading` changes.
+    private func updatePulse(_ button: NSStatusBarButton) {
+        button.wantsLayer = true
+        if model.menuBarIsLoading {
+            guard button.layer?.animation(forKey: "pulse") == nil else { return }
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 1.0
+            pulse.toValue = 0.35
+            pulse.duration = 0.7
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            button.layer?.add(pulse, forKey: "pulse")
+        } else {
+            button.layer?.removeAnimation(forKey: "pulse")
+            button.layer?.opacity = 1
+        }
     }
 
     /// Compose the gauge symbol + `title` into one NSImage. The image height is pinned to

@@ -32,6 +32,17 @@ Toggled from **Settings ▸ Show usage % in menu bar**. **Off by default.**
 - **On** — the `%` is shown as text next to the icon (e.g. `⌁ 84%`), and the gauge is
   **static at 50%** (decorative; the number carries the meaning).
 
+## Loading (first fetch)
+
+Until the active account's first usage fetch returns, the icon shows an **empty gauge**
+(`needle.0percent`) that **pulses** (opacity 1 ↔ 0.35), so it reads as "fetching" rather
+than "0% used". Once usage arrives the pulse stops and the gauge jumps to the real bucket.
+
+The first fetch auto-retries: on failure it retries every **5 s** for up to **5 attempts**
+(`RetryPolicy`), showing `Fetch failed (429) — Retrying…` in the account row between tries.
+If all attempts fail the row settles on the bare error (`Fetch failed (429)`), which stays
+tappable to retry manually. The 60 s background poll is single-shot (no auto-retry).
+
 ## Color states
 
 The icon and text share one color, keyed on the **worst window** (max of 5-hour and 7-day):

@@ -69,10 +69,22 @@ struct MenuBarStyleTests {
         }
     }
 
-    @Test("Show % OFF, unknown usage → falls back to the 50% glyph")
+    @Test("Show % OFF, unknown usage (not loading) → falls back to the 50% glyph")
     func gaugeFallsBackWhenUnknown() {
         #expect(MenuBarStyle.gaugeSymbol(pct: nil, showUsage: false)
                 == "gauge.with.dots.needle.50percent")
+    }
+
+    @Test("First-load (loading, no data yet) → empty 0% gauge to pulse")
+    func gaugeEmptyWhileLoading() {
+        #expect(MenuBarStyle.gaugeSymbol(pct: nil, showUsage: false, isLoading: true)
+                == "gauge.with.dots.needle.0percent")
+    }
+
+    @Test("Loading is ignored once real usage has arrived")
+    func loadingIgnoredOnceUsageKnown() {
+        #expect(MenuBarStyle.gaugeSymbol(pct: 84, showUsage: false, isLoading: true)
+                == "gauge.with.dots.needle.100percent")
     }
 
     @Test("Show % OFF → usage is clamped to 0–100 before snapping")
@@ -146,6 +158,15 @@ struct MenuBarStyleTests {
                                           showUsage: false, stayAwake: false)
         #expect(p.title == "—")
         #expect(p.gaugeSymbol == "gauge.with.dots.needle.50percent")
+        #expect(p.color == nil)
+    }
+
+    @Test("First-load → dash title + empty gauge (which the caller pulses)")
+    func presentationLoading() {
+        let p = MenuBarStyle.presentation(fiveHourPct: nil, sevenDayPct: nil,
+                                          showUsage: false, stayAwake: false, isLoading: true)
+        #expect(p.title == "—")
+        #expect(p.gaugeSymbol == "gauge.with.dots.needle.0percent")
         #expect(p.color == nil)
     }
 

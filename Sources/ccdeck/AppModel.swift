@@ -26,10 +26,15 @@ final class AppModel {
     }
     let threshold: Double = 90
 
-    // Keep-awake (caffeinate -i equivalent). Not persisted — resets on launch.
+    // Keep-awake (caffeinate -s equivalent). Not persisted — resets on launch.
     private let stayAwake = StayAwake()
     private let clamshell = ClamshellMonitor()
     private(set) var shouldStayAwake = false
+
+    // Accounts whose first usage fetch is still in flight (including auto-retries) and have
+    // no data yet — drives the menu-bar "loading" pulse + 0% gauge. See `RetryPolicy`.
+    private(set) var loadingEmails: Set<String> = []
+    private var retryTasks: [String: Task<Void, Never>] = [:]
 
     private let store: Store
     private var timer: Timer?
@@ -57,12 +62,46 @@ final class AppModel {
 
     func start() {
         guard timer == nil else { return }
-        Task { await refreshAll() }
+        // First load retries with backoff so a cold-start 429 recovers on its own instead of
+        // stranding a "Fetch failed" the user has to click. The 60s poll below stays single-shot.
+        for account in accounts { scheduleInitialLoad(account) }
         let t = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.tick() }
         }
         timer = t
         RunLoop.main.add(t, forMode: .common)
+    }
+
+    /// First-load fetch for one account: retry on a fixed interval up to `RetryPolicy`'s cap,
+    /// showing "… — Retrying…" between tries, then leave a bare (tappable) error if it never
+    /// succeeds. `loadingEmails` marks it as loading throughout so the menu bar pulses.
+    private func scheduleInitialLoad(_ account: Account) {
+        let email = account.email
+        retryTasks[email]?.cancel()
+        retryTasks[email] = Task { @MainActor [weak self] in
+            await self?.loadWithRetry(account)
+            self?.retryTasks[email] = nil
+        }
+    }
+
+    private func loadWithRetry(_ account: Account) async {
+        let email = account.email
+        loadingEmails.insert(email)
+        defer { loadingEmails.remove(email) }
+
+        for attempt in 1...RetryPolicy.maxAttempts {
+            if Task.isCancelled { return }
+            await refresh(account)
+            if errorByEmail[email] == nil {           // fetched — done
+                autoSwitchIfNeeded()
+                lastRefresh = Date()
+                return
+            }
+            guard RetryPolicy.shouldRetry(afterAttempt: attempt) else { break }
+            errorByEmail[email] = RetryPolicy.retryingMessage(base: errorByEmail[email] ?? "Fetch failed")
+            try? await Task.sleep(for: .seconds(RetryPolicy.interval))
+        }
+        lastRefresh = Date()                          // gave up — bare error stays for tap-to-retry
     }
 
     private func tick() async {
@@ -126,6 +165,7 @@ final class AppModel {
     /// "fetch failed" can be cleared without refetching every account.
     func retry(email: String) async {
         guard let account = accounts.first(where: { $0.email == email }) else { return }
+        retryTasks[email]?.cancel(); retryTasks[email] = nil   // supersede any auto-retry loop
         errorByEmail[email] = nil            // clear so the UI shows "loading…" mid-retry
         await refresh(account)
         autoSwitchIfNeeded()
@@ -384,6 +424,8 @@ final class AppModel {
     }
 
     func removeAccount(email: String) {
+        retryTasks[email]?.cancel(); retryTasks[email] = nil
+        loadingEmails.remove(email)
         Keychain.removeStored(email: email)
         store.deleteAccount(email: email)
         accounts = store.listAccounts()
@@ -409,12 +451,24 @@ final class AppModel {
         )
     }
 
+    /// True while an auto-retry loop is still live for this account (see `RetryPolicy`), so
+    /// the UI can show "… — Retrying…" and suppress the manual "Click to retry" affordance.
+    func isAutoRetrying(email: String) -> Bool { retryTasks[email] != nil }
+
+    /// True while the active account's first fetch is still in flight with no data yet —
+    /// the menu bar shows an empty (0%) gauge and pulses it. See `AppDelegate` for the pulse.
+    var menuBarIsLoading: Bool {
+        guard let email = activeEmail else { return false }
+        return loadingEmails.contains(email) && usageByEmail[email] == nil
+    }
+
     /// The composed menu-bar presentation (title + gauge on the 5-hour burn, color on the
     /// worst window). Single wiring point — see `MenuBarStyle.presentation`.
     private var menuBarPresentation: MenuBarStyle.Presentation {
         let u = activeEmail.flatMap { usageByEmail[$0] }
         return MenuBarStyle.presentation(fiveHourPct: u?.fiveHourPct, sevenDayPct: u?.sevenDayPct,
-                                         showUsage: showUsageInMenuBar, stayAwake: shouldStayAwake)
+                                         showUsage: showUsageInMenuBar, stayAwake: shouldStayAwake,
+                                         isLoading: menuBarIsLoading)
     }
 
     /// Compact menu-bar label: active account's 5-hour %, or a dash if unknown.

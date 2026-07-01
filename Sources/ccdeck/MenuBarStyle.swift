@@ -32,9 +32,13 @@ enum MenuBarStyle {
     ///
     /// Buckets (usage → gauge): 0–10 → 0, 11–40 → 33, 41–50 → 50, 51–80 → 67, 81–100 → 100.
     /// (Apple ships `67percent`, not 66 — the "two-thirds" glyph.)
-    static func gaugeSymbol(pct: Double?, showUsage: Bool) -> String {
+    ///
+    /// While the first fetch is still in flight (`isLoading`, no usage yet) the needle sits
+    /// at 0 — an empty gauge the caller pulses to signal "loading". Unknown-and-not-loading
+    /// (a failed/idle fetch) keeps the neutral 50% glyph.
+    static func gaugeSymbol(pct: Double?, showUsage: Bool, isLoading: Bool = false) -> String {
         if showUsage { return gaugeName(50) }
-        guard let pct else { return gaugeName(50) }
+        guard let pct else { return gaugeName(isLoading ? 0 : 50) }
         switch pct {
         case ..<11:  return gaugeName(0)
         case ..<41:  return gaugeName(33)
@@ -62,11 +66,12 @@ enum MenuBarStyle {
     ///
     /// The imminent-reset countdown (handled by the caller) may still replace `title`.
     static func presentation(fiveHourPct: Double?, sevenDayPct: Double?,
-                             showUsage: Bool, stayAwake: Bool) -> Presentation {
+                             showUsage: Bool, stayAwake: Bool,
+                             isLoading: Bool = false) -> Presentation {
         let worst = [fiveHourPct, sevenDayPct].compactMap { $0 }.max()
         return Presentation(
             title: fiveHourPct.map { "\(Int($0))%" } ?? "—",
-            gaugeSymbol: gaugeSymbol(pct: fiveHourPct, showUsage: showUsage),
+            gaugeSymbol: gaugeSymbol(pct: fiveHourPct, showUsage: showUsage, isLoading: isLoading),
             color: color(pct: worst, stayAwake: stayAwake)
         )
     }

@@ -2,10 +2,11 @@ import IOKit.pwr_mgt
 
 /// Holds a system power assertion to keep the Mac awake — the in-process
 /// equivalent of `caffeinate -s`. The assertion uses
-/// `kIOPMAssertionTypePreventSystemSleep`, the strongest variant: it stops the
-/// system from sleeping even when the lid is closed (clamshell), including on
-/// battery. The display may still sleep. Releasing the assertion (or quitting)
-/// restores normal sleep.
+/// `kIOPMAssertionTypePreventSystemSleep`: it blocks *idle* system sleep on AC
+/// and battery. It does NOT block lid-close (clamshell) sleep — no power
+/// assertion can; that requires `pmset disablesleep`, run as root by the
+/// privileged helper (see `HelperManager`/`ClamshellMonitor`). The display may
+/// still sleep. Releasing the assertion (or quitting) restores normal sleep.
 final class StayAwake {
     private var assertionID: IOPMAssertionID = 0
     private(set) var isActive = false

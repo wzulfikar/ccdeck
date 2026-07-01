@@ -28,7 +28,9 @@ func isResetUrgent(_ date: Date, now: Date = Date()) -> Bool {
 func resetLine(next: (date: Date, account: String), weekly: (date: Date, account: String)?) -> String {
     var line = "Next reset: in \(relativeReset(next.date)) (\(next.account))"
     if let weekly, weekly.date != next.date {
-        line += ". Weekly reset in \(relativeReset(weekly.date)) (\(weekly.account))."
+        // Only tag the weekly account when it differs from the next-reset account.
+        let tag = weekly.account == next.account ? "" : " (\(weekly.account))"
+        line += ". Weekly reset in \(relativeReset(weekly.date))\(tag)."
     }
     return line
 }
@@ -204,9 +206,12 @@ struct MenuView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(weeklyExceeded || u.fiveHourPct >= model.threshold ? .orange : .secondary)
             } else if let err = model.errorByEmail[acct.email] {
-                Text(err).font(.caption2).foregroundStyle(.orange)
+                // Retrying: passive "… — Retrying…", swapped to "Click to retry now." on hover.
+                let retrying = model.isAutoRetrying(email: acct.email)
+                Text(retrying && hovered ? RetryPolicy.hoverMessage(err) : err)
+                    .font(.caption2).foregroundStyle(.orange)
                     .contentShape(Rectangle())
-                    .help("Click to retry")
+                    .help(retrying ? "Click to retry now" : "Click to retry")
                     .onTapGesture { Task { await model.retry(email: acct.email) } }
             }
 
@@ -256,10 +261,16 @@ struct MenuView: View {
             GaugeRow(title: "7-day", value: u.sevenDayPct, total: 100,
                      reset: u.sevenDayResets, resetLeading: true)
         } else if let err = model.errorByEmail[acct.email] {
-            Text("\(err). Click to retry.")
+            // While auto-retrying, show the "… — Retrying…" text as-is (no manual affordance);
+            // on hover, swap the tail for "Click to retry now." Once it's given up, fall back
+            // to the plain tappable "… Click to retry." error.
+            let retrying = model.isAutoRetrying(email: acct.email)
+            let hovered = hoveredEmail == acct.email
+            Text(retrying ? (hovered ? RetryPolicy.hoverMessage(err) : err) : "\(err). Click to retry.")
                 .font(.caption).foregroundStyle(.orange)
                 .contentShape(Rectangle())
-                .help("Click to retry")
+                .help(retrying ? "Click to retry now" : "Click to retry")
+                .onHover { hoveredEmail = $0 ? acct.email : (hoveredEmail == acct.email ? nil : hoveredEmail) }
                 .onTapGesture { Task { await model.retry(email: acct.email) } }
         } else {
             Text("fetching usage…").font(.caption).foregroundStyle(.secondary)
