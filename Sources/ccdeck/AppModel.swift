@@ -415,6 +415,19 @@ final class AppModel {
         return "\(Int(max(u.fiveHourPct, u.sevenDayPct)))%"
     }
 
+    /// SF Symbol gauge whose needle reflects usage (active account's worst window),
+    /// bucketed to the needle variants Apple ships. Used for the menu-bar icon when the %
+    /// text is hidden, so the icon alone conveys usage at a glance — a full gauge means
+    /// heavy usage. Falls back to the 50% glyph when usage is unknown.
+    var usageGaugeSymbol: String {
+        guard let email = activeEmail, let u = usageByEmail[email] else {
+            return "gauge.with.dots.needle.50percent"
+        }
+        let used = min(100, max(0, max(u.fiveHourPct, u.sevenDayPct)))
+        let nearest = [0, 33, 50, 67, 100].min { abs(Double($0) - used) < abs(Double($1) - used) }!
+        return "gauge.with.dots.needle.\(nearest)percent"
+    }
+
     /// Minutes until the soonest upcoming reset (either window, any account), but only
     /// when that's within 5 minutes — used as a transient menu-bar hint. nil otherwise.
     /// Uses the same source as `nextReset` so the menu-bar and window agree.

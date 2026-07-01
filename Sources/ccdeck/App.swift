@@ -111,7 +111,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let bakedColor: NSColor? = model.shouldStayAwake
             ? NSColor(srgbRed: 0.686, green: 0.322, blue: 0.871, alpha: 1)  // ~systemPurple
             : model.menuIconColor                                          // orange ≥70%, else nil
-        button.image = statusImage(title: title, bakedColor: bakedColor)
+        // With the % text shown, the gauge is decorative (static 50%); with it hidden, the
+        // needle itself conveys remaining usage so the bare icon is readable.
+        let symbolName = model.showUsageInMenuBar ? "gauge.with.dots.needle.50percent"
+                                                  : model.usageGaugeSymbol
+        button.image = statusImage(title: title, bakedColor: bakedColor, symbolName: symbolName)
         button.imagePosition = .imageOnly
         button.contentTintColor = nil
     }
@@ -121,13 +125,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// `bakedColor` is nil the result is a template (only alpha matters, glyphs drawn
     /// black-but-opaque so the bar recolors them); when set, the symbol + text are drawn
     /// in that exact color and the image is NOT a template, so the color survives.
-    private func statusImage(title: String, bakedColor: NSColor?) -> NSImage {
+    private func statusImage(title: String, bakedColor: NSColor?, symbolName: String) -> NSImage {
         let font = NSFont.menuBarFont(ofSize: 0)
         var symbolCfg = NSImage.SymbolConfiguration(pointSize: font.pointSize + 2, weight: .regular)
         if let bakedColor {
             symbolCfg = symbolCfg.applying(NSImage.SymbolConfiguration(paletteColors: [bakedColor]))
         }
-        let symbol = (NSImage(systemSymbolName: "gauge.with.dots.needle.50percent",
+        let symbol = (NSImage(systemSymbolName: symbolName,
                               accessibilityDescription: "CC Deck")?
             .withSymbolConfiguration(symbolCfg) ?? NSImage())
         let symbolSize = symbol.size
