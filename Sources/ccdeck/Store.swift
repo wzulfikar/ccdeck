@@ -3,7 +3,7 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// SQLite persistence: the account roster + a rolling history of usage snapshots.
+/// SQLite persistence: the account roster and app settings.
 /// Kept on the main actor so the non-Sendable `sqlite3` handle never crosses actors.
 @MainActor
 final class Store {
@@ -36,16 +36,6 @@ final class Store {
             plan  TEXT NOT NULL,
             ord   INTEGER NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            email       TEXT NOT NULL,
-            ts          REAL NOT NULL,
-            five_pct    REAL NOT NULL,
-            seven_pct   REAL NOT NULL,
-            five_reset  REAL,
-            seven_reset REAL
-        );
-        CREATE INDEX IF NOT EXISTS idx_snap_email_ts ON snapshots(email, ts);
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -89,7 +79,6 @@ final class Store {
 
     func deleteAccount(email: String) {
         run("DELETE FROM accounts WHERE email=?;", text: email)
-        run("DELETE FROM snapshots WHERE email=?;", text: email)
     }
 
     func nextOrder() -> Int {
@@ -98,55 +87,6 @@ final class Store {
         else { return 0 }
         defer { sqlite3_finalize(stmt) }
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int(stmt, 0)) : 0
-    }
-
-    // MARK: - Snapshots
-
-    func insertSnapshot(email: String, usage: Usage) {
-        var stmt: OpaquePointer?
-        let sql = "INSERT INTO snapshots(email,ts,five_pct,seven_pct,five_reset,seven_reset) VALUES(?,?,?,?,?,?);"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, email, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_double(stmt, 2, usage.fetchedAt.timeIntervalSince1970)
-        sqlite3_bind_double(stmt, 3, usage.fiveHourPct)
-        sqlite3_bind_double(stmt, 4, usage.sevenDayPct)
-        bindOptionalDate(stmt, 5, usage.fiveHourResets)
-        bindOptionalDate(stmt, 6, usage.sevenDayResets)
-        sqlite3_step(stmt)
-    }
-
-    /// Peak utilization over the last `seconds` for an account.
-    func summary(email: String, lastSeconds: TimeInterval) -> UsageSummary {
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT COALESCE(MAX(five_pct),0), COALESCE(MAX(seven_pct),0), COUNT(*)
-        FROM snapshots WHERE email=? AND ts>=?;
-        """
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return UsageSummary(peakFiveHour: 0, peakSevenDay: 0, samples: 0)
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, email, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_double(stmt, 2, Date().addingTimeInterval(-lastSeconds).timeIntervalSince1970)
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
-            return UsageSummary(peakFiveHour: 0, peakSevenDay: 0, samples: 0)
-        }
-        return UsageSummary(
-            peakFiveHour: sqlite3_column_double(stmt, 0),
-            peakSevenDay: sqlite3_column_double(stmt, 1),
-            samples: Int(sqlite3_column_int(stmt, 2))
-        )
-    }
-
-    /// Drop snapshots older than `days` to keep the file small.
-    func pruneSnapshots(olderThanDays days: Int) {
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400).timeIntervalSince1970
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "DELETE FROM snapshots WHERE ts<?;", -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, cutoff)
-        sqlite3_step(stmt)
     }
 
     // MARK: - Settings
@@ -183,10 +123,5 @@ final class Store {
     private func text(_ stmt: OpaquePointer?, _ col: Int32) -> String {
         guard let c = sqlite3_column_text(stmt, col) else { return "" }
         return String(cString: c)
-    }
-
-    private func bindOptionalDate(_ stmt: OpaquePointer?, _ idx: Int32, _ date: Date?) {
-        if let date { sqlite3_bind_double(stmt, idx, date.timeIntervalSince1970) }
-        else { sqlite3_bind_null(stmt, idx) }
     }
 }

@@ -4,6 +4,15 @@ macOS menu bar app that juggles **multiple Claude (claude.ai) subscriptions** fo
 See live quota for every account, switch between them in one click, and auto-rotate to a
 fresh account when the current one hits its limit.
 
+**Menu bar preview**
+
+| **State**    | **Menu bar**                                        |
+| :----------- | :-------------------------------------------------- |
+| Idle         | ![Idle](docs/screenshots/ccdeckmenu1.png)           |
+| Usage >70%   | ![Usage over 70%](docs/screenshots/ccdeckmenu2.png) |
+| Stay awake   | ![Stay awake](docs/screenshots/ccdeckmenu3.png)     |
+| Show usage % | ![Show usage %](docs/screenshots/ccdeckmenu4.png)   |
+
 > All accounts must be **your own paid subscriptions**. This is account management, not
 > a way around paying for what you use.
 
@@ -15,8 +24,13 @@ fresh account when the current one hits its limit.
 - **Auto-rotate at 90%** — when the active account's window crosses the threshold, rotate
   to the account with the **soonest reset** (use-it-or-lose-it). When all accounts are
   exhausted, circle back to the first.
-- **Usage history** — snapshots polled every 60s into SQLite; peak utilization over
-  day / 7d / 30d / month.
+- **Usage snapshots** — each account's quota is polled every 60s and recorded to SQLite.
+
+**Preview**
+
+| Idle | Usage >70% | Stay awake | Show usage % |
+| :-: | :-: | :-: | :-: |
+| ![Idle](docs/screenshots/ccdeck1.png) | ![Usage over 70%](docs/screenshots/ccdeck2.png) | ![Stay awake](docs/screenshots/ccdeck4.png) | ![Show usage %](docs/screenshots/ccdeck3.png) |
 
 ## How it works
 
@@ -54,7 +68,26 @@ for the account identity), authenticated with the account's OAuth access token.
 - **Token refresh is best-effort.** Background polling refreshes expired tokens via the
   OAuth token endpoint; if that fails, the account is flagged for re-login.
 
-## Build & run
+## Install
+
+**Direct download (no Homebrew)** — grab the latest `.dmg` from the
+[Releases page](https://github.com/wzulfikar/ccdeck/releases/latest), open it, and drag
+**ccdeck** into Applications. The DMG is notarized and stapled, so Gatekeeper opens it with
+no warning. Stable direct link:
+
+```
+https://github.com/wzulfikar/ccdeck/releases/latest/download/ccdeck.dmg
+```
+
+**Homebrew**
+
+```sh
+brew install <your-tap>/ccdeck   # TODO: replace with the real tap once published
+```
+
+Requires macOS 14+.
+
+## Build from source
 
 ```sh
 swift build

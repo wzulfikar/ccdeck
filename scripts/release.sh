@@ -70,7 +70,9 @@ git tag "$VERSION"
 : "${APPLE_ID_APP_SPECIFIC_PASSWORD:?set APPLE_ID_APP_SPECIFIC_PASSWORD}"
 
 APP="dist/$APP_NAME.app"
-DMG="dist/$APP_NAME-$VERSION.dmg"
+# Versionless name so `/releases/latest/download/ccdeck.dmg` is a stable URL
+# that never breaks across releases.
+DMG="dist/$APP_NAME.dmg"
 
 # 1. Build + sign the bundle with the Developer ID identity (hardened runtime).
 CODESIGN_IDENTITY="$IDENTITY" VERSION="$VERSION" ./scripts/create_app_bundle.sh release

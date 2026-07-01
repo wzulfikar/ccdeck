@@ -131,7 +131,6 @@ final class AppModel {
 
     private func tick() async {
         await refreshAll()
-        store.pruneSnapshots(olderThanDays: 35)
     }
 
     // MARK: - Keep-awake
@@ -221,7 +220,6 @@ final class AppModel {
             let usage = try await OAuthClient.fetchUsage(accessToken: creds.accessToken)
             usageByEmail[account.email] = usage
             errorByEmail[account.email] = nil
-            store.insertSnapshot(email: account.email, usage: usage)
         } catch OAuthError.unauthorized {
             errorByEmail[account.email] = "needs re-login"
         } catch let OAuthError.http(code) {
@@ -457,12 +455,6 @@ final class AppModel {
         usageByEmail[email] = nil
         errorByEmail[email] = nil
         if activeEmail == email { activeEmail = nil }
-    }
-
-    // MARK: - Summaries (for the history section)
-
-    func summary(email: String, lastSeconds: TimeInterval) -> UsageSummary {
-        store.summary(email: email, lastSeconds: lastSeconds)
     }
 
     /// Aggregate quota across all accounts that currently have usage data.

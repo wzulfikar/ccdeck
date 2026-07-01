@@ -86,13 +86,6 @@ struct Profile: Sendable {
     var plan: String { hasMax ? "max" : (hasPro ? "pro" : "free") }
 }
 
-/// Aggregated history for the summary section.
-struct UsageSummary: Sendable {
-    var peakFiveHour: Double
-    var peakSevenDay: Double
-    var samples: Int
-}
-
 /// Total quota across every account with live data. With N accounts you have N×
 /// the quota, so `total` is `100 * N` and `used` is the sum of utilizations — e.g.
 /// two accounts at 100% and 39% read as 139% of 200%.

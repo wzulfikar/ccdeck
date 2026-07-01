@@ -42,7 +42,7 @@ enum MenuBarStyle {
         switch pct {
         case ..<11:  return gaugeName(0)
         case ..<41:  return gaugeName(33)
-        case ..<51:  return gaugeName(50)
+        case ..<60:  return gaugeName(50)
         case ..<81:  return gaugeName(67)
         default:     return gaugeName(100)
         }

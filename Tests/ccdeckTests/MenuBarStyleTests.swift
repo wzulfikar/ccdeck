@@ -53,13 +53,13 @@ struct MenuBarStyleTests {
 
     @Test("Show % OFF → needle bucketed by usage range")
     func gaugeTracksUsageWhenHidden() {
-        // (usage, expected gauge variant) — buckets: 0–10→0, 11–40→33, 41–50→50,
-        // 51–80→67, 81–100→100. Includes both ends of every bucket.
+        // (usage, expected gauge variant) — buckets: 0–10→0, 11–40→33, 41–59→50,
+        // 60–80→67, 81–100→100. Includes both ends of every bucket.
         let cases: [(Double, Int)] = [
             (0, 0), (10, 0),          // 0–10 → 0
             (11, 33), (12, 33), (40, 33),   // 11–40 → 33  (the 12% account belongs here)
-            (41, 50), (44, 50), (50, 50),   // 41–50 → 50
-            (51, 67), (80, 67),       // 51–80 → 67
+            (41, 50), (50, 50), (59, 50),   // 41–59 → 50
+            (60, 67), (80, 67),       // 60–80 → 67
             (81, 100), (100, 100),    // 81–100 → 100
         ]
         for (usage, variant) in cases {
