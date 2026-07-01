@@ -59,6 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: - Popover
 
     @objc private func togglePopover(_ sender: Any?) {
+        // ⌥-click is a shortcut to flip keep-awake without opening the window.
+        // Read the live modifier state (NSApp.currentEvent is unreliable for status items).
+        if NSEvent.modifierFlags.contains(.option) {
+            model.toggleStayAwake()
+            return
+        }
         if popover.isShown { popover.performClose(sender) } else { showPopover() }
     }
 
@@ -96,32 +102,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             title = model.showUsageInMenuBar ? model.menuTitle : ""
         }
 
-        // Render gauge + title into ONE template image and let the menu-bar machinery
-        // recolor it. This is the only reliable path: an SF-Symbol template image
-        // auto-colors to the true bar appearance (white on dark) — that's what made the
-        // bare icon correct — whereas any title set via `attributedTitle`/`title`, or a
-        // hand-picked tint from `effectiveAppearance` (which lies .aqua here), renders
-        // dark-on-dark. Baking the text into the same template makes it follow the icon.
-        button.image = statusImage(title: title)
+        // Render gauge + title into ONE image. Any non-white color (purple for keep-awake,
+        // orange at ≥70%) is BAKED into the pixels as a non-template image; only the plain
+        // white/safe state is a template the bar auto-recolors. We never tint via
+        // contentTintColor — on this status button an explicit tint (dynamic OR concrete)
+        // resolves dark-on-dark; baking sidesteps that entirely. Keep-awake wins over the
+        // usage color.
+        let bakedColor: NSColor? = model.shouldStayAwake
+            ? NSColor(srgbRed: 0.686, green: 0.322, blue: 0.871, alpha: 1)  // ~systemPurple
+            : model.menuIconColor                                          // orange ≥70%, else nil
+        button.image = statusImage(title: title, bakedColor: bakedColor)
         button.imagePosition = .imageOnly
-        // nil → bar auto-colors (white on dark / black on light); ≥70% stamps orange.
-        button.contentTintColor = model.menuIconColor
+        button.contentTintColor = nil
     }
 
-    /// Compose the gauge symbol + `title` into a single template NSImage. The image
-    /// height is pinned to the symbol's height so the icon never shrinks when text is
-    /// present. Drawing color is irrelevant for a template (only alpha is used).
-    private func statusImage(title: String) -> NSImage {
+    /// Compose the gauge symbol + `title` into one NSImage. The image height is pinned to
+    /// the symbol's height so the icon never shrinks when text is present. When
+    /// `bakedColor` is nil the result is a template (only alpha matters, glyphs drawn
+    /// black-but-opaque so the bar recolors them); when set, the symbol + text are drawn
+    /// in that exact color and the image is NOT a template, so the color survives.
+    private func statusImage(title: String, bakedColor: NSColor?) -> NSImage {
         let font = NSFont.menuBarFont(ofSize: 0)
-        let symbolCfg = NSImage.SymbolConfiguration(pointSize: font.pointSize + 2, weight: .regular)
+        var symbolCfg = NSImage.SymbolConfiguration(pointSize: font.pointSize + 2, weight: .regular)
+        if let bakedColor {
+            symbolCfg = symbolCfg.applying(NSImage.SymbolConfiguration(paletteColors: [bakedColor]))
+        }
         let symbol = (NSImage(systemSymbolName: "gauge.with.dots.needle.50percent",
                               accessibilityDescription: "CC Deck")?
             .withSymbolConfiguration(symbolCfg) ?? NSImage())
         let symbolSize = symbol.size
 
-        // Color is irrelevant for a template image (only alpha is sampled), but the glyphs
-        // must be fully opaque so the menu-bar machinery can recolor them white-on-dark.
-        let textAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        // For a template, color is irrelevant (only alpha sampled) but glyphs must be
+        // opaque so the bar can recolor them; for a baked image, draw text in the color.
+        let textAttrs: [NSAttributedString.Key: Any] = [.font: font,
+                                                         .foregroundColor: bakedColor ?? NSColor.black]
         let text = title as NSString
         let textSize = title.isEmpty ? .zero : text.size(withAttributes: textAttrs)
         let gap: CGFloat = title.isEmpty ? 0 : 4
@@ -141,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                       withAttributes: textAttrs)
         }
         image.unlockFocus()
-        image.isTemplate = true
+        image.isTemplate = bakedColor == nil
         return image
     }
 }

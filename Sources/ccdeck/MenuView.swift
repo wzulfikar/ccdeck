@@ -84,8 +84,11 @@ struct MenuView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(model.loginURL == nil ? "Opening sign-in page…" : "Authorize in your browser — I'll capture it automatically.")
+                    Text(model.loginURL == nil ? "Opening sign-in page…" : "Authorize in your browser…")
                         .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") { model.cancelAddAccount() }
+                        .buttonStyle(.borderless).font(.caption2)
                 }
                 if model.loginURL != nil {
                     // Only needed if the browser shows a code to copy back; many logins
@@ -161,7 +164,7 @@ struct MenuView: View {
                let reset = u.sevenDayPct >= 100 ? u.sevenDayResets : u.fiveHourResets {
                 Text("reset in \(relativeReset(reset))")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isResetUrgent(reset) ? .orange : .secondary)
                     .lineLimit(1)
             }
 
@@ -192,6 +195,9 @@ struct MenuView: View {
                     .foregroundStyle(weeklyExceeded || u.fiveHourPct >= model.threshold ? .orange : .secondary)
             } else if let err = model.errorByEmail[acct.email] {
                 Text(err).font(.caption2).foregroundStyle(.orange)
+                    .contentShape(Rectangle())
+                    .help("Click to retry")
+                    .onTapGesture { Task { await model.retry(email: acct.email) } }
             }
 
             // Trash sits next to the % (or email, for the active account).
@@ -240,9 +246,13 @@ struct MenuView: View {
             GaugeRow(title: "7-day", value: u.sevenDayPct, total: 100,
                      reset: u.sevenDayResets, resetLeading: true)
         } else if let err = model.errorByEmail[acct.email] {
-            Text(err).font(.caption).foregroundStyle(.orange)
+            Text("\(err). Click to retry.")
+                .font(.caption).foregroundStyle(.orange)
+                .contentShape(Rectangle())
+                .help("Click to retry")
+                .onTapGesture { Task { await model.retry(email: acct.email) } }
         } else {
-            Text("loading…").font(.caption).foregroundStyle(.secondary)
+            Text("fetching usage…").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -364,12 +374,14 @@ private struct GaugeRow: View {
                 Spacer()
                 if let reset, resetLeading {
                     Text("reset in \(relativeReset(reset))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2)
+                        .foregroundStyle(isResetUrgent(reset) ? .orange : .secondary)
                 }
                 Text(valueText).font(.caption.monospacedDigit()).foregroundStyle(textColor)
                 if let reset, !resetLeading {
                     Text("· resets \(relativeReset(reset))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2)
+                        .foregroundStyle(isResetUrgent(reset) ? .orange : .secondary)
                 }
             }
             ProgressView(value: min(value, total), total: max(total, 1))

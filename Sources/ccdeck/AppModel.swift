@@ -122,6 +122,15 @@ final class AppModel {
         autoSwitchIfNeeded()
     }
 
+    /// Manual single-account retry — backs the tappable error label so a transient
+    /// "fetch failed" can be cleared without refetching every account.
+    func retry(email: String) async {
+        guard let account = accounts.first(where: { $0.email == email }) else { return }
+        errorByEmail[email] = nil            // clear so the UI shows "loading…" mid-retry
+        await refresh(account)
+        autoSwitchIfNeeded()
+    }
+
     private func refresh(_ account: Account) async {
         guard let blob = Keychain.storedBlob(email: account.email),
               var creds = OAuthCreds.parse(blob) else {
@@ -150,8 +159,14 @@ final class AppModel {
             store.insertSnapshot(email: account.email, usage: usage)
         } catch OAuthError.unauthorized {
             errorByEmail[account.email] = "needs re-login"
+        } catch let OAuthError.http(code) {
+            errorByEmail[account.email] = "Fetch failed (\(code))"
+        } catch let e as URLError where e.code == .notConnectedToInternet || e.code == .networkConnectionLost {
+            errorByEmail[account.email] = "Offline"
+        } catch let e as URLError where e.code == .timedOut {
+            errorByEmail[account.email] = "Timed out"
         } catch {
-            errorByEmail[account.email] = "fetch failed"
+            errorByEmail[account.email] = "Fetch failed"
         }
     }
 
@@ -276,6 +291,17 @@ final class AppModel {
         guard !trimmed.isEmpty, let stdin = loginStdin else { return }
         stdin.write(Data((trimmed + "\n").utf8))
         statusMessage = "Submitting code…"
+    }
+
+    /// Aborts an in-progress `claude auth login`: kills the subprocess, stops the
+    /// Keychain watcher, and clears the awaiting state so the UI returns to normal.
+    func cancelAddAccount() {
+        guard isAwaitingLogin else { return }
+        loginWatch?.cancel()
+        loginWatch = nil
+        isAwaitingLogin = false
+        endLoginSession()
+        statusMessage = "Sign-in cancelled."
     }
 
     /// Pulls the sign-in URL out of Claude's "If the browser didn't open, visit: …" line.
@@ -415,10 +441,14 @@ final class AppModel {
 
     /// Menu-bar icon + text tint. Orange once the displayed % (active account's worst
     /// window, matching `menuTitle`) hits 70%; never red — red in the menu bar is too
-    /// distracting. nil = default template white when usage is safe.
+    /// distracting. nil = default template white when usage is safe. Concrete sRGB, not
+    /// dynamic `.systemOrange`: this gets baked into the icon pixels, and a catalog color
+    /// resolves against the status button's (lying .aqua) appearance and comes out dark.
     var menuIconColor: NSColor? {
         guard let email = activeEmail, let u = usageByEmail[email] else { return nil }
-        return max(u.fiveHourPct, u.sevenDayPct) >= 70 ? .systemOrange : nil
+        return max(u.fiveHourPct, u.sevenDayPct) >= 70
+            ? NSColor(srgbRed: 1.0, green: 0.584, blue: 0.0, alpha: 1)  // ~systemOrange
+            : nil
     }
 
     func label(for email: String) -> String {
