@@ -37,6 +37,7 @@ func resetLine(next: (date: Date, account: String), weekly: (date: Date, account
 
 struct MenuView: View {
     @Bindable var model: AppModel
+    @ObservedObject private var updater = AppUpdater.shared
     @State private var hoveredEmail: String?
     @State private var pendingDelete: Account?
     @State private var copiedEmail: String?
@@ -105,7 +106,7 @@ struct MenuView: View {
 
     private var infoPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("ccdeck").font(.title3.bold())
+            Text("CC Deck").font(.title3.bold())
             Text("A menu-bar dashboard for your Claude accounts. Tracks 5-hour and 7-day usage across multiple accounts. Auto-switch to another account before you hit a limit, and keep your Mac awake with one click.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -117,6 +118,11 @@ struct MenuView: View {
                 Link("github.com/wzulfikar/ccdeck",
                      destination: URL(string: "https://github.com/wzulfikar/ccdeck")!)
                     .font(.callout)
+            }
+            if updater.isBrewManaged {
+                Text("Updates via Homebrew. Run `brew upgrade ccdeck`")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(16)
@@ -365,6 +371,8 @@ struct MenuView: View {
             settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
 
+            updatesRow
+
             // Informational status sits on its own line above the buttons
             // (e.g. "Switched to …"). Space is reserved even when empty so the
             // label appearing/disappearing causes no layout shift.
@@ -397,7 +405,7 @@ struct MenuView: View {
                     Text(model.shouldStayAwake ? "Stay awake ✓" : "Stay awake")
                         .foregroundStyle(model.shouldStayAwake ? Color.purple : Color.primary)
                 }
-                .help(model.shouldStayAwake ? "Stay awake: on — click to allow sleep" : "Stay awake: off — keep Mac awake")
+                .help(model.shouldStayAwake ? "Stay awake ON. Click to allow sleep." : "Stay awake OFF. Click to prevent sleep.")
                 .contextMenu {
                     Button("Remove keep-awake helper…") { model.removeStayAwakeHelper() }
                 }
@@ -411,6 +419,21 @@ struct MenuView: View {
                     .keyboardShortcut("q", modifiers: .command)
             }
             .font(.caption)
+        }
+    }
+
+    /// Update control: a "Check for Updates…" button when Sparkle is driving updates.
+    /// Brew-managed installs show the `brew upgrade` hint in the info popover instead.
+    /// Hidden entirely when no feed is configured yet (nothing actionable to show).
+    @ViewBuilder
+    private var updatesRow: some View {
+        if updater.isActive {
+            HStack {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .buttonStyle(.borderless).font(.callout)
+                    .disabled(!updater.canCheckForUpdates)
+                Spacer()
+            }
         }
     }
 

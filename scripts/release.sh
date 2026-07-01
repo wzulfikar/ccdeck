@@ -131,7 +131,32 @@ if [ "$PUBLISH" = 1 ]; then
         --generate-notes
     echo "Published: $(gh release view "$VERSION" --json url -q .url)"
 
-    # 7. Update the Homebrew cask (git submodule) to point at this release and
+    # 7. Generate + sign the Sparkle appcast and attach it to the release. The app's
+    #    feed URL is /releases/latest/download/appcast.xml, which always resolves to
+    #    the newest release's asset — so uploading a fresh single-entry appcast here
+    #    is enough for existing installs to see this version. generate_appcast reads
+    #    the EdDSA private key from the login Keychain (put there once by generate_keys;
+    #    see docs/auto-update.md). No key → skip, don't fail the release.
+    GEN_APPCAST="$(find .build/artifacts -type f -name generate_appcast 2>/dev/null | head -1)"
+    [ -z "$GEN_APPCAST" ] && GEN_APPCAST="$(command -v generate_appcast || true)"
+    if [ -n "$GEN_APPCAST" ]; then
+        echo "==> generating appcast"
+        APPCAST_DIR="dist/appcast"
+        rm -rf "$APPCAST_DIR"
+        mkdir -p "$APPCAST_DIR"
+        cp "$DMG" "$APPCAST_DIR/"
+        # Every item in this run gets the same prefix; the folder holds only this
+        # version's DMG, so the enclosure URL points at this release's asset.
+        "$GEN_APPCAST" \
+            --download-url-prefix "https://github.com/wzulfikar/$APP_NAME/releases/download/$VERSION/" \
+            "$APPCAST_DIR"
+        gh release upload "$VERSION" "$APPCAST_DIR/appcast.xml" --clobber
+        echo "Appcast attached: $APPCAST_DIR/appcast.xml"
+    else
+        echo "warning: generate_appcast not found — skipping appcast (auto-update feed not updated)" >&2
+    fi
+
+    # 8. Update the Homebrew cask (git submodule) to point at this release and
     #    record the new submodule commit in this superproject.
     CASK="homebrew-tap/Casks/$APP_NAME.rb"
     if [ -f "$CASK" ]; then

@@ -78,6 +78,29 @@ if [ -z "${VERSION:-}" ]; then
     fi
 fi
 
+# Sparkle compares CFBundleVersion with its version comparator, which expects a
+# plain dotted number — a leading "v" (v0.1.2) breaks the comparison. Strip it for
+# the plist keys; the in-app label re-adds the "v" for display.
+VERSION_NUM="${VERSION#v}"
+
+# Sparkle auto-update feed. The public EdDSA key is read from $SPARKLE_PUBLIC_KEY or
+# Resources/sparkle_pubkey.txt. Without it we omit the Sparkle keys entirely so the
+# embedded framework stays dormant (see docs/auto-update.md for the one-time setup).
+SPARKLE_FEED_URL="https://github.com/wzulfikar/ccdeck/releases/latest/download/appcast.xml"
+SPARKLE_PUBKEY="${SPARKLE_PUBLIC_KEY:-}"
+if [ -z "$SPARKLE_PUBKEY" ] && [ -f "Resources/sparkle_pubkey.txt" ]; then
+    SPARKLE_PUBKEY="$(tr -d '[:space:]' < Resources/sparkle_pubkey.txt)"
+fi
+SPARKLE_KEYS=""
+if [ -n "$SPARKLE_PUBKEY" ]; then
+    SPARKLE_KEYS="    <key>SUFeedURL</key>                 <string>$SPARKLE_FEED_URL</string>
+    <key>SUPublicEDKey</key>             <string>$SPARKLE_PUBKEY</string>
+    <key>SUEnableAutomaticChecks</key>   <true/>
+    <key>SUScheduledCheckInterval</key>  <integer>86400</integer>"
+else
+    echo "==> Sparkle: no public key (SPARKLE_PUBLIC_KEY / Resources/sparkle_pubkey.txt) — updater dormant"
+fi
+
 cat >"$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -88,11 +111,12 @@ cat >"$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>        <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>        <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key>           <string>$VERSION</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION_NUM</string>
+    <key>CFBundleVersion</key>           <string>$VERSION_NUM</string>
     <key>LSMinimumSystemVersion</key>    <string>14.0</string>
     <key>NSHighResolutionCapable</key>   <true/>
     <key>NSHumanReadableCopyright</key>  <string>MIT License</string>
+$SPARKLE_KEYS
     <!-- App controls Dock visibility at runtime (regular when a window is open,
          accessory / menu-bar-only when closed), so no LSUIElement here. -->
 </dict>
@@ -104,6 +128,22 @@ if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP/Contents/Info.plist"
     echo "==> embedded Resources/AppIcon.icns"
+fi
+
+# Embed Sparkle.framework. `swift build` copies the framework (from the binary
+# xcframework dependency) into the build bin dir; the app finds it at runtime via
+# the @executable_path/../Frameworks rpath set in Package.swift. Signing happens
+# below in the inside-out codesign pass.
+SPARKLE_FRAMEWORK="$BIN_DIR/Sparkle.framework"
+APP_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FRAMEWORK" ]; then
+    echo "==> embedding Sparkle.framework"
+    mkdir -p "$APP/Contents/Frameworks"
+    # -R preserves the Versions/Current symlink structure that framework signing needs.
+    cp -R "$SPARKLE_FRAMEWORK" "$APP_FRAMEWORK"
+else
+    echo "warning: $SPARKLE_FRAMEWORK not found — auto-update disabled in this build" >&2
+    APP_FRAMEWORK=""
 fi
 
 # Codesign. A STABLE signing identity is what makes the Keychain "Always Allow"
@@ -142,7 +182,22 @@ case "${HARDENED_RUNTIME:-}${IDENTITY}" in
     echo "==> codesign (identity: $IDENTITY)"
     ;;
 esac
-# Inside-out: helper first, then the app bundle that contains it.
+# Inside-out signing. Sparkle's nested XPC services + helper tools ship ad-hoc
+# signed, so each must be re-signed with our identity (hardened runtime, NO --deep —
+# --deep applies one requirement to all nested code and breaks Sparkle) BEFORE the
+# framework, which is signed before the helper and app that enclose it.
+if [ -n "$APP_FRAMEWORK" ]; then
+    echo "==> codesign Sparkle.framework (inside-out)"
+    FW_V="$APP_FRAMEWORK/Versions/B"
+    for xpc in "$FW_V/XPCServices/Installer.xpc" "$FW_V/XPCServices/Downloader.xpc"; do
+        [ -e "$xpc" ] && codesign "${SIGN_ARGS[@]}" "$xpc"
+    done
+    [ -e "$FW_V/Autoupdate" ]  && codesign "${SIGN_ARGS[@]}" "$FW_V/Autoupdate"
+    [ -e "$FW_V/Updater.app" ] && codesign "${SIGN_ARGS[@]}" "$FW_V/Updater.app"
+    codesign "${SIGN_ARGS[@]}" "$APP_FRAMEWORK"
+fi
+
+# Helper first, then the app bundle that contains both it and the framework.
 codesign "${SIGN_ARGS[@]}" "$APP/Contents/MacOS/$HELPER_NAME"
 codesign "${SIGN_ARGS[@]}" "$APP"
 

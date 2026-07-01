@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.start()
 
+        // Create the updater on the main thread at launch so its background check
+        // schedule starts (no-op for Homebrew installs / when no feed is configured).
+        _ = AppUpdater.shared
+
         // Regular policy → Dock icon is visible and clickable.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
