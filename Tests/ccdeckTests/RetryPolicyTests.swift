@@ -3,18 +3,18 @@ import Testing
 
 @Suite("RetryPolicy")
 struct RetryPolicyTests {
-    @Test("First-load fetches up to 5 times, 5s apart")
+    @Test("First-load fetches up to 10 times, 5s apart")
     func limits() {
-        #expect(RetryPolicy.maxAttempts == 5)
+        #expect(RetryPolicy.maxAttempts == 10)
         #expect(RetryPolicy.interval == 5)
     }
 
     @Test("Keeps retrying until the last attempt, then stops")
     func shouldRetry() {
         #expect(RetryPolicy.shouldRetry(afterAttempt: 1))
-        #expect(RetryPolicy.shouldRetry(afterAttempt: 4))
-        #expect(!RetryPolicy.shouldRetry(afterAttempt: 5))   // 5th is the last try
-        #expect(!RetryPolicy.shouldRetry(afterAttempt: 6))
+        #expect(RetryPolicy.shouldRetry(afterAttempt: 9))
+        #expect(!RetryPolicy.shouldRetry(afterAttempt: 10))   // 10th is the last try
+        #expect(!RetryPolicy.shouldRetry(afterAttempt: 11))
     }
 
     @Test("Retrying label appends the tail to the failure reason")

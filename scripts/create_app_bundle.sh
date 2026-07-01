@@ -63,7 +63,15 @@ cat >"$APP/Contents/Library/LaunchDaemons/$HELPER_LABEL.plist" <<DPLIST
 </plist>
 DPLIST
 
-VERSION="$(git describe --tags --always 2>/dev/null || echo 0.1.0)"
+# Version precedence: caller-provided $VERSION (from release.sh) > version.txt >
+# hardcoded fallback. Never a git hash — the shown version must be a real release tag.
+if [ -z "${VERSION:-}" ]; then
+    if [ -f version.txt ]; then
+        VERSION="$(tr -d '[:space:]' < version.txt)"
+    else
+        VERSION="v0.1.0"
+    fi
+fi
 
 cat >"$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

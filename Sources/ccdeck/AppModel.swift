@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AppKit
+import ServiceManagement
 
 /// Central state + orchestration: account roster, live usage, polling, and the
 /// auto-switch policy. Everything runs on the main actor.
@@ -24,6 +25,15 @@ final class AppModel {
     var showUsageInMenuBar: Bool {
         didSet { store.setSetting("showUsageInMenuBar", showUsageInMenuBar ? "1" : "0") }
     }
+    // Launch-at-login via SMAppService. Truth lives in the registration status, not our
+    // store — so we mirror the real state on init and toggle the app's login item on change.
+    var startAtLoginEnabled: Bool {
+        didSet {
+            guard !suppressLoginItemUpdate else { return }
+            applyStartAtLogin()
+        }
+    }
+    private var suppressLoginItemUpdate = false
     let threshold: Double = 90
 
     // Keep-awake (caffeinate -s equivalent). Not persisted — resets on launch.
@@ -53,9 +63,24 @@ final class AppModel {
         self.store = store
         self.autoSwitchEnabled = store.getSetting("autoSwitch") == "1"
         self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") == "1"  // default off
+        self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
         detectActiveFromKeychain()
+    }
+
+    /// Register/unregister the app as a login item. On failure we surface the reason and
+    /// snap the toggle back to reality (suppressing the observer so it doesn't re-fire).
+    private func applyStartAtLogin() {
+        do {
+            if startAtLoginEnabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            statusMessage = "Start at login failed: \(error.localizedDescription)"
+            suppressLoginItemUpdate = true
+            startAtLoginEnabled.toggle()
+            suppressLoginItemUpdate = false
+        }
     }
 
     // MARK: - Lifecycle

@@ -42,9 +42,19 @@ struct MenuView: View {
     @State private var copiedEmail: String?
     @State private var statusCopied = false
     @State private var loginCode = ""
+    @State private var showInfo = false
+
+    /// App version from the bundle (e.g. "v0.1.0"), normalized to a leading "v".
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        return v.hasPrefix("v") ? v : "v\(v)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            header
+            Divider()
+
             if model.accounts.isEmpty {
                 emptyState
             } else {
@@ -70,6 +80,47 @@ struct MenuView: View {
         } message: { acct in
             Text("\(acct.label) (\(acct.email)) will be removed from CC Deck.")
         }
+    }
+
+    // MARK: - Header
+
+    /// Title bar: info button (left), "ccdeck" (center), version (right). A ZStack keeps
+    /// the title truly centered regardless of the side items' widths.
+    private var header: some View {
+        ZStack {
+            Text("ccdeck").font(.headline)
+            HStack {
+                Button { showInfo = true } label: {
+                    Image(systemName: "info.circle").font(.callout)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("About CC Deck")
+                .popover(isPresented: $showInfo, arrowEdge: .bottom) { infoPopover }
+                Spacer()
+                Text(appVersion).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var infoPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ccdeck").font(.title3.bold())
+            Text("A menu-bar dashboard for your Claude accounts. Tracks 5-hour and 7-day usage across multiple accounts. Auto-switch to another account before you hit a limit, and keep your Mac awake with one click.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Made with ♥️ by Wildan Zulfikar (@wzulfikar)")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 4) {
+                Text("Github:").font(.callout).foregroundStyle(.secondary)
+                Link("github.com/wzulfikar/ccdeck",
+                     destination: URL(string: "https://github.com/wzulfikar/ccdeck")!)
+                    .font(.callout)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
     }
 
     private var emptyState: some View {
@@ -206,9 +257,11 @@ struct MenuView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(weeklyExceeded || u.fiveHourPct >= model.threshold ? .orange : .secondary)
             } else if let err = model.errorByEmail[acct.email] {
-                // Retrying: passive "… — Retrying…", swapped to "Click to retry now." on hover.
+                // Passive error text (e.g. "… — Retrying…"). Unlike the active account,
+                // more-accounts rows don't swap in "Click to retry now." on hover — the
+                // hover slot here belongs to the Switch button. Tap still retries.
                 let retrying = model.isAutoRetrying(email: acct.email)
-                Text(retrying && hovered ? RetryPolicy.hoverMessage(err) : err)
+                Text(err)
                     .font(.caption2).foregroundStyle(.orange)
                     .contentShape(Rectangle())
                     .help(retrying ? "Click to retry now" : "Click to retry")
@@ -309,6 +362,7 @@ struct MenuView: View {
             Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
 
             settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
+            settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
 
             // Informational status sits on its own line above the buttons

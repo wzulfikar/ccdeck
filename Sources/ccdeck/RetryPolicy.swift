@@ -6,7 +6,7 @@ import Foundation
 /// the numbers and the "Retrying…" copy can be unit-tested without a network or timers.
 enum RetryPolicy {
     /// Total fetch attempts on first load (the initial try plus retries).
-    static let maxAttempts = 5
+    static let maxAttempts = 10
     /// Delay between attempts.
     static let interval: TimeInterval = 5
 
