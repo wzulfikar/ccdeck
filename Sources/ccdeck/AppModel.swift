@@ -37,6 +37,12 @@ final class AppModel {
     private var loginWatch: Task<Void, Never>?
     private(set) var isAwaitingLogin = false
 
+    // Live `claude auth login` subprocess (Terminal-free flow). We keep the process
+    // and its stdin so we can feed the pasted auth code, and surface the sign-in URL.
+    private var loginProcess: Process?
+    private var loginStdin: FileHandle?
+    private(set) var loginURL: URL?
+
     init() {
         let store = Store()
         self.store = store
@@ -199,30 +205,95 @@ final class AppModel {
 
     // MARK: - Add / capture accounts
 
-    /// Starts the add-account flow: opens a Terminal running `claude auth login`
-    /// (which opens the browser and prompts for the pasted auth code), then watches
-    /// the Keychain and auto-captures the new account once Claude writes it.
+    /// Starts the add-account flow: runs `claude auth login` as a subprocess (no
+    /// Terminal window), scrapes the sign-in URL it prints, opens that in the default
+    /// browser, and then watches the Keychain to auto-capture the new account once
+    /// Claude writes it.
+    ///
+    /// Running the subprocess ourselves — against a *known-good* binary — avoids the
+    /// spawned-Terminal shell resolving `claude` to a broken install
+    /// ("native binary not installed"). The pasted auth code is fed back via
+    /// `submitLoginCode(_:)` → the process's stdin.
     ///
     /// We deliberately let `claude` perform the Keychain write so the credential blob
     /// is in exactly the format Claude Code expects — we never reconstruct it.
     func startAddAccount() {
+        guard !isAwaitingLogin else { return }
+        guard let binary = ClaudeBinary.resolve() else {
+            statusMessage = "Couldn't find a working `claude` binary. Is Claude Code installed?"
+            return
+        }
+
         let preToken = OAuthCreds.parse(Keychain.currentOfficialBlob() ?? "")?.accessToken
         let knownTokens = Set(accounts.compactMap { acct in
             Keychain.storedBlob(email: acct.email).flatMap { OAuthCreds.parse($0)?.accessToken }
         })
 
-        let script = "tell application \"Terminal\"\nactivate\ndo script \"claude auth login\"\nend tell"
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", script]
+        p.executableURL = URL(fileURLWithPath: binary)
+        p.arguments = ["auth", "login"]
+        let stdout = Pipe()
+        let stdin = Pipe()
+        p.standardOutput = stdout
+        p.standardError = stdout   // claude may print the URL on either stream
+        p.standardInput = stdin
+
+        // Scan the merged output for the "visit: <url>" line and open it once.
+        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let text = String(decoding: data, as: UTF8.self)
+            guard let url = Self.extractLoginURL(from: text) else { return }
+            Task { @MainActor in self?.presentLoginURL(url) }
+        }
+
         do { try p.run() } catch {
-            statusMessage = "Couldn't open Terminal: \(error)"
+            statusMessage = "Couldn't start `claude auth login`: \(error)"
             return
         }
 
+        loginProcess = p
+        loginStdin = stdin.fileHandleForWriting
+        loginURL = nil
         isAwaitingLogin = true
-        statusMessage = "Sign in (and paste the code) in Terminal — I'll capture it automatically."
+        statusMessage = "Opening the sign-in page…"
         watchForNewLogin(preToken: preToken, knownTokens: knownTokens)
+    }
+
+    /// Opens the sign-in URL in the default browser (once) and surfaces it in the UI.
+    private func presentLoginURL(_ url: URL) {
+        guard loginURL == nil else { return }
+        loginURL = url
+        NSWorkspace.shared.open(url)
+        statusMessage = "Authorize in your browser — capturing automatically."
+    }
+
+    /// Feeds the pasted auth code to the running `claude auth login` process. Claude
+    /// then completes the login and writes the credential to the Keychain, which
+    /// `watchForNewLogin` picks up and captures.
+    func submitLoginCode(_ code: String) {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let stdin = loginStdin else { return }
+        stdin.write(Data((trimmed + "\n").utf8))
+        statusMessage = "Submitting code…"
+    }
+
+    /// Pulls the sign-in URL out of Claude's "If the browser didn't open, visit: …" line.
+    nonisolated static func extractLoginURL(from text: String) -> URL? {
+        for token in text.split(whereSeparator: { $0.isWhitespace }) {
+            if token.hasPrefix("https://"), let url = URL(string: String(token)) { return url }
+        }
+        return nil
+    }
+
+    /// Tears down a login subprocess (on success, timeout, or cancel).
+    private func endLoginSession() {
+        loginProcess?.standardOutput.map { ($0 as? Pipe)?.fileHandleForReading.readabilityHandler = nil }
+        try? loginStdin?.close()
+        if let p = loginProcess, p.isRunning { p.terminate() }
+        loginProcess = nil
+        loginStdin = nil
+        loginURL = nil
     }
 
     /// Polls the live Keychain entry until it changes to a token we haven't seen,
@@ -240,6 +311,7 @@ final class AppModel {
                 if isNew {
                     await self.captureCurrentLogin()
                     self.isAwaitingLogin = false
+                    self.endLoginSession()
                     return
                 }
             }
@@ -250,6 +322,7 @@ final class AppModel {
     private func finishAwaitingLoginTimeout() {
         guard isAwaitingLogin else { return }
         isAwaitingLogin = false
+        endLoginSession()
         statusMessage = "Didn't detect a new login. If you finished signing in, click Capture current login."
     }
 

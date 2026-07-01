@@ -29,6 +29,7 @@ struct MenuView: View {
     @State private var pendingDelete: Account?
     @State private var copiedEmail: String?
     @State private var statusCopied = false
+    @State private var loginCode = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -71,13 +72,41 @@ struct MenuView: View {
                     Task { await model.captureCurrentLogin() }
                 }
             }
-            if model.isAwaitingLogin {
+            loginPrompt
+        }
+    }
+
+    /// Shown while a `claude auth login` subprocess is running: paste the code from
+    /// the browser here to finish sign-in.
+    @ViewBuilder
+    private var loginPrompt: some View {
+        if model.isAwaitingLogin {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Waiting for sign-in…").font(.caption2).foregroundStyle(.secondary)
+                    Text(model.loginURL == nil ? "Opening sign-in page…" : "Authorize in your browser — I'll capture it automatically.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if model.loginURL != nil {
+                    // Only needed if the browser shows a code to copy back; many logins
+                    // finish on their own once you press Authorize.
+                    HStack(spacing: 6) {
+                        TextField("Code (only if shown)", text: $loginCode)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption)
+                            .onSubmit(submitLoginCode)
+                        Button("Submit", action: submitLoginCode)
+                            .font(.caption)
+                            .disabled(loginCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
                 }
             }
         }
+    }
+
+    private func submitLoginCode() {
+        model.submitLoginCode(loginCode)
+        loginCode = ""
     }
 
     // MARK: - Accounts (above the meters)
@@ -269,11 +298,10 @@ struct MenuView: View {
                 Button("Get current login") {
                     Task { await model.captureCurrentLogin() }
                 }
-                if model.isAwaitingLogin {
-                    ProgressView().controlSize(.small)
-                }
             }
             .font(.caption)
+
+            loginPrompt
 
             HStack {
                 Button { Task { await model.refreshAll() } } label: {
@@ -282,7 +310,7 @@ struct MenuView: View {
                 .help("Refresh now")
                 Button { model.toggleStayAwake() } label: {
                     Text(model.shouldStayAwake ? "Stay awake ✓" : "Stay awake")
-                        .foregroundStyle(model.shouldStayAwake ? Color.orange : Color.primary)
+                        .foregroundStyle(model.shouldStayAwake ? Color.purple : Color.primary)
                 }
                 .help(model.shouldStayAwake ? "Stay awake: on — click to allow sleep" : "Stay awake: off — keep Mac awake")
                 .contextMenu {
