@@ -5,7 +5,7 @@
 # Usage:
 #   ./scripts/create_app_bundle.sh [debug|release]   (default: release)
 #
-# Output: dist/ccdeck.app
+# Output: "dist/CC Deck.app"
 #
 # Why a bundle: running the bare SPM binary makes macOS treat the process as a
 # non-app, which causes glitches like the spinning wait cursor over the menu bar
@@ -14,7 +14,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# APP_NAME is the internal identity — executable filename, helper prefix, artifact
+# basename, bundle-id leaf. NEVER user-facing. APP_BUNDLE is the display name: the
+# .app folder + CFBundleName/DisplayName that Finder, /Applications, and the Login
+# Items "App Background Activity" list show.
 APP_NAME="ccdeck"
+APP_BUNDLE="CC Deck"
 BUNDLE_ID="com.wzulfikar.ccdeck"
 CONFIG="${1:-release}"
 
@@ -35,7 +40,7 @@ HELPER_BIN="$BIN_DIR/$HELPER_NAME"
     exit 1
 }
 
-APP="dist/$APP_NAME.app"
+APP="dist/$APP_BUNDLE.app"
 echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchDaemons"
@@ -78,8 +83,8 @@ cat >"$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>              <string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key>       <string>CC Deck</string>
+    <key>CFBundleName</key>              <string>$APP_BUNDLE</string>
+    <key>CFBundleDisplayName</key>       <string>$APP_BUNDLE</string>
     <key>CFBundleIdentifier</key>        <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>        <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>

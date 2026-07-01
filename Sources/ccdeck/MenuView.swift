@@ -23,10 +23,10 @@ func isResetUrgent(_ date: Date, now: Date = Date()) -> Bool {
     return secs > 0 && secs < 3600
 }
 
-/// "Next reset: in … (Name)" plus a "Weekly reset in … (Name)." tail when a distinct
+/// "Next reset in … (Name)" plus a "Weekly reset in … (Name)." tail when a distinct
 /// 7-day reset exists (skipped when the soonest reset is already the weekly one).
 func resetLine(next: (date: Date, account: String), weekly: (date: Date, account: String)?) -> String {
-    var line = "Next reset: in \(relativeReset(next.date)) (\(next.account))"
+    var line = "Next reset in \(relativeReset(next.date)) (\(next.account))"
     if let weekly, weekly.date != next.date {
         // Only tag the weekly account when it differs from the next-reset account.
         let tag = weekly.account == next.account ? "" : " (\(weekly.account))"
@@ -400,6 +400,11 @@ struct MenuView: View {
                 .help(model.shouldStayAwake ? "Stay awake: on — click to allow sleep" : "Stay awake: off — keep Mac awake")
                 .contextMenu {
                     Button("Remove keep-awake helper…") { model.removeStayAwakeHelper() }
+                }
+                if model.awaitingHelperApproval {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("Waiting for helper approval in System Settings ▸ Login Items")
                 }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }

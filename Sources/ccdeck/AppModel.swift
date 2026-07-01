@@ -40,6 +40,10 @@ final class AppModel {
     private let stayAwake = StayAwake()
     private let clamshell = ClamshellMonitor()
     private(set) var shouldStayAwake = false
+    // True while we're polling for the user to approve the helper in Login Items —
+    // drives the menu-bar loading pulse and the spinner beside the Stay-awake button.
+    private(set) var awaitingHelperApproval = false
+    private var approvalPollTask: Task<Void, Never>?
 
     // Accounts whose first usage fetch is still in flight (including auto-retries) and have
     // no data yet — drives the menu-bar "loading" pulse + 0% gauge. See `RetryPolicy`.
@@ -138,6 +142,7 @@ final class AppModel {
     func toggleStayAwake() {
         let target = !shouldStayAwake
         shouldStayAwake = target
+        statusMessage = ""
         // Power assertion handles idle sleep instantly, no privileges needed.
         if target {
             stayAwake.start()
@@ -145,20 +150,100 @@ final class AppModel {
             // the system keeps running (disablesleep), only the display sleeps.
             clamshell.onLidClosed = { DisplayControl.sleepNow() }
             clamshell.start()
+            // The privileged helper adds lid-close-on-battery suppression via pmset.
+            // First time (or after removal) it needs a one-time install + approval.
+            enableLidCloseHelper()
         } else {
             stayAwake.stop()
             clamshell.stop()
+            cancelApprovalWait()
+            Task { try? await HelperManager.shared.setDisableSleep(false) }
         }
-        statusMessage = ""
-        // The privileged helper adds lid-close-on-battery suppression via pmset.
-        Task {
-            do {
-                try await HelperManager.shared.setDisableSleep(target)
-            } catch HelperError.needsApproval {
-                statusMessage = "Approve “CC Deck” in System Settings ▸ Login Items, then toggle again to stay awake with the lid closed."
-            } catch {
-                statusMessage = "Lid-close keep-awake unavailable (\(error.localizedDescription)). Idle sleep still blocked; keep the lid open."
+    }
+
+    /// Turn on privileged lid-close suppression, walking the user through the
+    /// one-time helper install + Login Items approval when it isn't ready yet.
+    private func enableLidCloseHelper() {
+        switch HelperManager.shared.state {
+        case .ready:
+            Task { await applyDisableSleep(true) }
+        case .notInstalled:
+            promptInstallHelper()
+        case .awaitingApproval:
+            HelperManager.shared.openLoginItems()
+            beginApprovalWait()
+        }
+    }
+
+    /// One-time consent alert before we register the privileged daemon. Explains
+    /// what the helper is for and that macOS will ask them to approve it.
+    private func promptInstallHelper() {
+        let alert = NSAlert()
+        alert.messageText = "Keep the Mac awake with the lid closed?"
+        alert.informativeText = """
+        ccdeck installs a small background helper so it can stay awake on battery \
+        with the lid shut. There's no approval popup, macOS just adds ccdeck to \
+        System Settings ▸ Login Items ▸ Allow in the Background. We'll open it for \
+        you, switch ccdeck on there.
+
+        Idle sleep is already blocked without it; this only adds lid-closed.
+        """
+        alert.addButton(withTitle: "Install Helper")
+        alert.addButton(withTitle: "Not Now")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try HelperManager.shared.register()
+        } catch {
+            statusMessage = "Couldn't install the helper: \(error.localizedDescription)"
+            return
+        }
+        // A prior approval may still be remembered → straight to ready, no trip
+        // to Settings needed. Otherwise open Login Items so the user can flip it on.
+        if HelperManager.shared.state == .ready {
+            Task { await applyDisableSleep(true) }
+        } else {
+            HelperManager.shared.openLoginItems()
+            beginApprovalWait()
+        }
+    }
+
+    /// Poll the daemon status until the user approves it in Login Items (or we
+    /// time out / they toggle back off). `awaitingHelperApproval` pulses the UI.
+    private func beginApprovalWait() {
+        awaitingHelperApproval = true
+        statusMessage = "Waiting for approval, click Allow for ccdeck in System Settings ▸ Login Items."
+        approvalPollTask?.cancel()
+        approvalPollTask = Task { @MainActor [weak self] in
+            for _ in 0..<120 {                       // ~60s at 500ms
+                if Task.isCancelled { return }
+                if HelperManager.shared.state == .ready {
+                    self?.awaitingHelperApproval = false
+                    await self?.applyDisableSleep(true)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
             }
+            guard let self, self.awaitingHelperApproval else { return }
+            self.awaitingHelperApproval = false
+            if self.shouldStayAwake {
+                self.statusMessage = "Still not approved. Approve ccdeck in System Settings ▸ Login Items, then toggle Stay awake again."
+            }
+        }
+    }
+
+    private func cancelApprovalWait() {
+        approvalPollTask?.cancel()
+        approvalPollTask = nil
+        awaitingHelperApproval = false
+    }
+
+    /// Apply the privileged lid-close toggle, surfacing any XPC failure.
+    private func applyDisableSleep(_ on: Bool) async {
+        do {
+            try await HelperManager.shared.setDisableSleep(on)
+            if on { statusMessage = "" }
+        } catch {
+            statusMessage = "Lid-close keep-awake unavailable (\(error.localizedDescription)). Idle sleep still blocked; keep the lid open."
         }
     }
 
@@ -168,6 +253,7 @@ final class AppModel {
         shouldStayAwake = false
         stayAwake.stop()
         clamshell.stop()
+        cancelApprovalWait()
         Task {
             try? await HelperManager.shared.setDisableSleep(false)
             HelperManager.shared.unregister()
@@ -475,6 +561,7 @@ final class AppModel {
     /// True while the active account's first fetch is still in flight with no data yet —
     /// the menu bar shows an empty (0%) gauge and pulses it. See `AppDelegate` for the pulse.
     var menuBarIsLoading: Bool {
+        if awaitingHelperApproval { return true }
         guard let email = activeEmail else { return false }
         return loadingEmails.contains(email) && usageByEmail[email] == nil
     }

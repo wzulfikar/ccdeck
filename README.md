@@ -1,4 +1,8 @@
-# ccdeck
+<p align="center">
+  <img src="docs/icon.png" width="128" height="128" alt="CC Deck icon">
+</p>
+
+<h1 align="center">CC Deck</h1>
 
 macOS menu bar app that juggles **multiple Claude (claude.ai) subscriptions** for Claude Code.
 See live quota for every account, switch between them in one click, and auto-rotate to a

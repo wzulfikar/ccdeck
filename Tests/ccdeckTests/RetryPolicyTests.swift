@@ -20,14 +20,14 @@ struct RetryPolicyTests {
     @Test("Retrying label appends the tail to the failure reason")
     func retryingMessage() {
         #expect(RetryPolicy.retryingMessage(base: "Fetch failed (429)")
-                == "Fetch failed (429) — Retrying…")
-        #expect(RetryPolicy.retryingMessage(base: "Offline") == "Offline — Retrying…")
+                == "Fetch failed (429). Retrying…")
+        #expect(RetryPolicy.retryingMessage(base: "Offline") == "Offline. Retrying…")
     }
 
     @Test("Hover swaps the Retrying… tail for a Click to retry now. call to action")
     func hoverMessage() {
-        #expect(RetryPolicy.hoverMessage("Fetch failed (429) — Retrying…")
-                == "Fetch failed (429) — Click to retry now.")
+        #expect(RetryPolicy.hoverMessage("Fetch failed (429). Retrying…")
+                == "Fetch failed (429). Click to retry now.")
         // No "Retrying…" tail (e.g. after giving up) → left unchanged.
         #expect(RetryPolicy.hoverMessage("Fetch failed (429)") == "Fetch failed (429)")
     }

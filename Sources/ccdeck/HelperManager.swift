@@ -36,6 +36,29 @@ final class HelperManager: @unchecked Sendable {
 
     private var service: SMAppService { .daemon(plistName: plistName) }
 
+    /// Coarse install/approval state the UI cares about, collapsed from the raw
+    /// `SMAppService.Status` cases.
+    enum State {
+        case ready            // registered + approved — XPC will work
+        case notInstalled     // never registered, or removed (needs one-time install)
+        case awaitingApproval // registered but the user hasn't approved it in Login Items yet
+    }
+
+    var state: State {
+        switch service.status {
+        case .enabled:          return .ready
+        case .requiresApproval: return .awaitingApproval
+        default:                return .notInstalled   // .notRegistered / .notFound
+        }
+    }
+
+    /// Register the daemon. On first install macOS parks it in `.requiresApproval`
+    /// until the user flips the switch in System Settings ▸ Login Items.
+    func register() throws { try service.register() }
+
+    /// Bounce the user to the Login Items pane where the approval toggle lives.
+    func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
+
     /// Ensure the daemon is registered. First time, macOS parks it in
     /// `.requiresApproval` and we bounce the user to Login Items.
     func ensureRegistered() throws {
