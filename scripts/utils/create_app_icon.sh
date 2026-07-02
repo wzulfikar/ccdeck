@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Regenerate Resources/AppIcon.icns (blue blueprint-grid squircle + white 50% gauge).
-# Usage: ./scripts/create_app_icon.sh
+# Usage: ./scripts/utils/create_app_icon.sh
 set -euo pipefail
-cd "$(dirname "$0")/.."
-swift scripts/create_app_icon.swift
+cd "$(dirname "$0")/../.."
+swift scripts/utils/create_app_icon.swift
 work="$(mktemp -d)/AppIcon.iconset"; mkdir -p "$work"
 gen() { sips -z "$1" "$1" /tmp/appicon_1024.png --out "$work/$2" >/dev/null; }
 gen 16 icon_16x16.png;    gen 32 icon_16x16@2x.png

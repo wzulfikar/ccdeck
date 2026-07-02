@@ -41,7 +41,7 @@ else
     CONFIG="debug"
     # Prefer the self-signed "ccdeck-dev" identity when it exists — a stable
     # identity is what makes the Keychain "Always Allow" decision persist across
-    # rebuilds. Falls back to ad-hoc (create_app_bundle.sh prints the warning).
+    # rebuilds. Falls back to ad-hoc (scripts/utils/create_app_bundle.sh prints the warning).
     if [ -z "${CODESIGN_IDENTITY:-}" ] \
         && security find-identity -v -p codesigning 2>/dev/null | grep -q '"ccdeck-dev"'; then
         export CODESIGN_IDENTITY="ccdeck-dev"
@@ -49,7 +49,7 @@ else
 fi
 
 echo "==> build variant: $VARIANT ($BUNDLE_ID)"
-./scripts/create_app_bundle.sh "$CONFIG"
+./scripts/utils/create_app_bundle.sh "$CONFIG"
 
 # Freshness manifest: lets bundle.sh --no-build and release.sh --no-bundle verify
 # they are shipping bits that match the current checkout.

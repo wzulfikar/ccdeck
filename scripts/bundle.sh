@@ -86,7 +86,68 @@ fi
 
 echo "==> building $DMG"
 rm -f "$DMG"
-hdiutil create -volname "$APP_BUNDLE" -srcfolder "$APP" -ov -format UDZO "$DMG"
+
+# Decorated DMG: stage the .app next to an /Applications symlink, arrange the
+# icons in a fixed window so the user can drag CC Deck onto Applications.
+# Dependency-free (hdiutil + Finder AppleScript); an optional background image
+# at scripts/utils/dmg-background.png (or @2x) is used if present.
+STAGING="dist/.dmg-staging"
+RW_DMG="dist/.$APP_NAME-rw.dmg"
+DMG_BG="scripts/utils/dmg-background.png"
+
+rm -rf "$STAGING" "$RW_DMG"
+mkdir -p "$STAGING"
+cp -R "$APP" "$STAGING/"
+ln -s /Applications "$STAGING/Applications"
+if [ -f "$DMG_BG" ]; then
+    mkdir -p "$STAGING/.background"
+    cp "$DMG_BG" "$STAGING/.background/background.png"
+    [ -f "scripts/utils/dmg-background@2x.png" ] && cp "scripts/utils/dmg-background@2x.png" "$STAGING/.background/background@2x.png"
+fi
+
+# Read-write DMG we can mount and decorate, then compress into the final one.
+hdiutil create -volname "$APP_BUNDLE" -srcfolder "$STAGING" -ov \
+    -fs HFS+ -format UDRW "$RW_DMG" >/dev/null
+
+MOUNT_DIR="/Volumes/$APP_BUNDLE"
+# Detach any stale mount, then mount fresh.
+hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true
+hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen >/dev/null
+
+# Finder needs a moment after mount before it will accept window scripting.
+sleep 2
+
+osascript <<EOF
+tell application "Finder"
+    tell disk "$APP_BUNDLE"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 800, 520}
+        set theViewOptions to the icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 128
+        if exists file ".background:background.png" then
+            set background picture of theViewOptions to file ".background:background.png"
+        end if
+        set position of item "$APP_BUNDLE.app" of container window to {150, 200}
+        set position of item "Applications" of container window to {450, 200}
+        close
+        open
+        update without registering applications
+        delay 1
+    end tell
+end tell
+EOF
+
+# Flush Finder's .DS_Store to disk before detaching.
+sync
+hdiutil detach "$MOUNT_DIR" >/dev/null
+
+# Compress the decorated RW image into the final distributable DMG.
+hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null
+rm -rf "$STAGING" "$RW_DMG"
 
 if [ "$NOTARIZE" = 1 ]; then
     # Notarize + staple the DMG too, so the downloaded artifact itself passes.

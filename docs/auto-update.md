@@ -7,7 +7,7 @@ and update with `brew upgrade` (Sparkle swapping the `.app` would desync `brew`)
 ## How it works
 
 - The app embeds `Sparkle.framework` in `Contents/Frameworks` (copied + re-signed by
-  `scripts/create_app_bundle.sh`).
+  `scripts/utils/create_app_bundle.sh`).
 - `AppUpdater` (`Sources/ccdeck/Updater.swift`) starts Sparkle only when **both**:
   - the app is **not** a Homebrew cask install — detected via the Caskroom metadata
     dir (`/opt/homebrew/Caskroom/ccdeck` or `/usr/local/Caskroom/ccdeck`); and
@@ -44,7 +44,7 @@ public half. Do this once:
    echo 'PASTE_PUBLIC_KEY_HERE' > Resources/sparkle_pubkey.txt
    ```
 
-   (or export `SPARKLE_PUBLIC_KEY=…` before building). `create_app_bundle.sh` writes
+   (or export `SPARKLE_PUBLIC_KEY=…` before building). `scripts/utils/create_app_bundle.sh` writes
    it into `Info.plist` as `SUPublicEDKey`; without it the Sparkle keys are omitted
    and the updater stays dormant.
 

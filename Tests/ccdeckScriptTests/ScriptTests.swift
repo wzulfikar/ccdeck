@@ -3,7 +3,7 @@ import Testing
 
 /// End-to-end tests for the build/bundle/release scripts. They shell out to the
 /// real scripts and inspect the dist/ artifacts, so they take minutes and are
-/// gated behind CCDECK_SLOW_TESTS=1 — run them via `./scripts/test.sh --slow`.
+/// gated behind CCDECK_SLOW_TESTS=1 — run them via `./scripts/utils/test.sh --slow`.
 /// A plain `swift test` reports them as skipped.
 ///
 /// Nothing here notarizes or publishes: bundle.sh runs with --no-notarize and
@@ -182,7 +182,7 @@ struct ScriptTests {
 
     @Test("reset.sh --dry-run plans a full cleanup with zero side effects")
     func resetDryRun() throws {
-        let r = try sh("./scripts/reset.sh --dry-run")
+        let r = try sh("./scripts/utils/reset.sh --dry-run")
         #expect(r.status == 0, "\(r.out)")
         // Plans both variants and every cleanup surface…
         #expect(r.out.contains("com.wzulfikar.ccdeck.dev"))
@@ -196,10 +196,10 @@ struct ScriptTests {
 
     @Test("reset.sh aborts without confirmation and rejects unknown flags")
     func resetGuards() throws {
-        let aborted = try sh("echo no | ./scripts/reset.sh --dev")
+        let aborted = try sh("echo no | ./scripts/utils/reset.sh --dev")
         #expect(aborted.status != 0)
         #expect(aborted.out.contains("aborted"))
-        let usage = try sh("./scripts/reset.sh --nope")
+        let usage = try sh("./scripts/utils/reset.sh --nope")
         #expect(usage.status != 0)
         #expect(usage.out.contains("usage:"))
     }

@@ -106,7 +106,7 @@ XPC clients whose team doesn't match the registrant's, so the "other" build's
 lid-close silently fails. This bit us with a personal-team `dist/` build vs the
 Klu-team brew build (see `.work/lessons/stay-awake-dev-prod-variant.md`).
 
-Fix: `create_app_bundle.sh` builds two **variants** via `VARIANT=dev|prod`
+Fix: `scripts/utils/create_app_bundle.sh` builds two **variants** via `VARIANT=dev|prod`
 (default `prod`). `dev` uses `com.wzulfikar.ccdeck-dev` → its own daemon label →
 coexists with the prod build. Ids are derived at runtime from
 `Bundle.main.bundleIdentifier` (see `HelperShared/HelperProtocol.swift`), so one

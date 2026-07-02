@@ -9,16 +9,18 @@ enum KeychainError: Error { case status(OSStatus) }
 ///   - `officialService` ("Claude Code-credentials"): the live entry Claude Code reads.
 ///     Activating an account == writing that account's blob here. The account name on
 ///     this item is the macOS short username (matches what Claude Code writes).
-///   - `appService` ("ccdeck"): our private store, one item per managed account,
+///   - `appService` ("CC Deck"): our private store, one item per managed account,
 ///     keyed by the account email.
 enum Keychain {
     static let officialService = "Claude Code-credentials"
-    /// "ccdeck" in production, "ccdeck-dev" in the dev variant (bundle id ends in
-    /// ".dev") — so running a dev build never touches the real account store.
+    /// "CC Deck" in production, "CC Deck (dev)" in the dev variant (bundle id ends
+    /// in ".dev") — so running a dev build never touches the real account store.
+    /// This string is the service name shown in Keychain Access, so it's spelled
+    /// as a product name to sit alongside "Claude Code-credentials".
     /// Note: `officialService` is intentionally NOT isolated; there is only one
     /// live Claude Code credential, and activating accounts is the app's job.
     static let appService: String =
-        (Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false) ? "ccdeck-dev" : "ccdeck"
+        (Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false) ? "CC Deck (dev)" : "CC Deck"
     static var officialAccount: String { NSUserName() }
 
     // MARK: - Primitives

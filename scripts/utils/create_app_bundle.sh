@@ -3,8 +3,8 @@
 # Package the SPM executable into a proper macOS .app bundle.
 #
 # Usage:
-#   ./scripts/create_app_bundle.sh [debug|release]        (default: release)
-#   VARIANT=dev ./scripts/create_app_bundle.sh            (dev build, own id)
+#   ./scripts/utils/create_app_bundle.sh [debug|release]        (default: release)
+#   VARIANT=dev ./scripts/utils/create_app_bundle.sh            (dev build, own id)
 #
 # Output: "dist/CC Deck.app" (prod) or "dist/CC Deck (Dev).app" (dev)
 #
@@ -13,7 +13,7 @@
 # and no proper app identity for the Keychain. A bundle fixes both.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # APP_NAME is the internal identity — executable filename, helper prefix, artifact
 # basename. NEVER user-facing. APP_BUNDLE is the display name: the .app folder +
@@ -240,10 +240,10 @@ fi
 #   # one-time: create a self-signed code-signing cert named "ccdeck-dev"
 #   #   Keychain Access ▸ Certificate Assistant ▸ Create a Certificate…
 #   #   Name: ccdeck-dev   Identity Type: Self Signed Root   Type: Code Signing
-#   CODESIGN_IDENTITY="ccdeck-dev" ./scripts/create_app_bundle.sh
+#   CODESIGN_IDENTITY="ccdeck-dev" ./scripts/utils/create_app_bundle.sh
 #
 #   # or an Apple-issued identity (from Xcode):
-#   CODESIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./scripts/create_app_bundle.sh
+#   CODESIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./scripts/utils/create_app_bundle.sh
 #
 # List available identities with:  security find-identity -v -p codesigning
 IDENTITY="${CODESIGN_IDENTITY:--}"

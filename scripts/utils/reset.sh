@@ -4,12 +4,12 @@
 # (or installing) from scratch.
 #
 # Usage:
-#   ./scripts/reset.sh                    # reset BOTH variants (asks first)
-#   ./scripts/reset.sh --dev              # dev variant only (com.wzulfikar.ccdeck.dev)
-#   ./scripts/reset.sh --prod             # prod variant only (com.wzulfikar.ccdeck)
-#   ./scripts/reset.sh --dry-run          # print everything it would do, touch nothing
-#   ./scripts/reset.sh --yes              # skip the confirmation prompt
-#   ./scripts/reset.sh --official-creds   # ALSO delete the live "Claude Code-credentials"
+#   ./scripts/utils/reset.sh                    # reset BOTH variants (asks first)
+#   ./scripts/utils/reset.sh --dev              # dev variant only (com.wzulfikar.ccdeck.dev)
+#   ./scripts/utils/reset.sh --prod             # prod variant only (com.wzulfikar.ccdeck)
+#   ./scripts/utils/reset.sh --dry-run          # print everything it would do, touch nothing
+#   ./scripts/utils/reset.sh --yes              # skip the confirmation prompt
+#   ./scripts/utils/reset.sh --official-creds   # ALSO delete the live "Claude Code-credentials"
 #                                         # keychain item (logs Claude Code itself out!)
 #
 # Per variant it removes:
@@ -29,7 +29,7 @@
 # force-clears ALL background items (every app) if you truly need it gone now.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 DEV=1
 PROD=1

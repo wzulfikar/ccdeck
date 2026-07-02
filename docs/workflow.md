@@ -3,7 +3,7 @@
 Three layered scripts. Each composes the one below, and each higher script has exactly one "skip the lower layer" escape hatch. Daily use is `build` (dev loop) and `release` (ship); `bundle` is the rare middle step for dmg testing.
 
 ```
-build.sh ──▶ bundle.sh ──▶ release.sh        reset.sh
+build.sh ──▶ bundle.sh ──▶ release.sh        scripts/utils/reset.sh
  (.app)      (.dmg)         (publish)      (clean slate)
 ```
 
@@ -58,7 +58,7 @@ Two reliability changes vs. the old release.sh:
 ./scripts/bundle.sh --no-notarize   # rare: poke at dmg packaging locally
 ```
 
-### `./scripts/reset.sh [--dev|--prod] [--official-creds] [--dry-run] [--yes]`
+### `./scripts/utils/reset.sh [--dev|--prod] [--official-creds] [--dry-run] [--yes]`
 
 Returns the machine to a pre-ccdeck state — "developing from day one." Resets both variants by default; `--dev` / `--prod` narrows it. Per variant it: quits the running app (graceful, then kill by bundle path so it never takes down the *other* variant), boots out the "Stay awake" helper daemon (sudo, prod only), resets **TCC privacy permissions** (`tccutil reset All <bundle-id>`), deletes the app from `/Applications`, purges the app's **Keychain service** items (`ccdeck` / `ccdeck-dev`, looped until empty), and removes Application Support data, `defaults` (incl. Sparkle's update-check state), caches, HTTPStorages, and saved application state. Then it clears `dist/`.
 
@@ -72,9 +72,9 @@ Safety rails:
 ## Tests
 
 ```bash
-./scripts/test.sh          # fast — unit tests (Tests/ccdeckTests), seconds
-./scripts/test.sh --slow   # slow — script pipeline tests, minutes
-./scripts/test.sh --all    # both
+./scripts/utils/test.sh          # fast — unit tests (Tests/ccdeckTests), seconds
+./scripts/utils/test.sh --slow   # slow — script pipeline tests, minutes
+./scripts/utils/test.sh --all    # both
 ```
 
 The slow suite is a new test target, `Tests/ccdeckScriptTests`, gated by `CCDECK_SLOW_TESTS=1` via Swift Testing's `.enabled(if:)` — so a bare `swift test` (CI, habit) stays fast and just reports the slow ones as skipped. The suite is `.serialized` because the tests share `dist/`.
@@ -93,7 +93,7 @@ Separate bundle IDs alone wouldn't isolate anything — two values were hardcode
 - `Keychain.appService` → now `ccdeck-dev` when the bundle ID ends in `.dev`. **Deliberate exception:** `officialService` ("Claude Code-credentials") stays shared, because there's only one live Claude Code credential and switching it is the app's whole purpose. Consequence: activating an account from the dev app changes the real active account. If you ever want a fully inert dev mode, that's the next thing to gate.
 - `Store.dbURL` → dev builds get `Application Support/ccdeck-dev/`.
 
-Also `create_app_bundle.sh` now takes `APP_BUNDLE` / `BUNDLE_ID` / `SPARKLE_ENABLED` from the environment (defaults unchanged = prod), which is how `build.sh` stays a thin wrapper.
+Also `scripts/utils/create_app_bundle.sh` now takes `APP_BUNDLE` / `BUNDLE_ID` / `SPARKLE_ENABLED` from the environment (defaults unchanged = prod), which is how `build.sh` stays a thin wrapper.
 
 ## Known limitations / notes
 
@@ -106,7 +106,7 @@ Also `create_app_bundle.sh` now takes `APP_BUNDLE` / `BUNDLE_ID` / `SPARKLE_ENAB
 `git apply ccdeck-workflow.patch` from the repo root (or review the individual scripts and drop them in). Then:
 
 ```bash
-./scripts/test.sh          # should pass immediately
+./scripts/utils/test.sh          # should pass immediately
 ./scripts/build.sh         # smoke-test the dev app
-./scripts/test.sh --slow   # full pipeline check
+./scripts/utils/test.sh --slow   # full pipeline check
 ```

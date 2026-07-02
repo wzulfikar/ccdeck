@@ -61,7 +61,7 @@ for the account identity), authenticated with the account's OAuth access token.
   build, so macOS re-prompts each launch. Build with a real identity to make it stick:
 
   ```sh
-  CODESIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./scripts/create_app_bundle.sh
+  CODESIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./scripts/utils/create_app_bundle.sh
   # list identities:  security find-identity -v -p codesigning
   ```
 

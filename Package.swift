@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         // Auto-update framework. Shipped as a binary xcframework; `swift build`
-        // drops Sparkle.framework into the build bin dir, which create_app_bundle.sh
+        // drops Sparkle.framework into the build bin dir, which scripts/utils/create_app_bundle.sh
         // embeds into Contents/Frameworks and re-signs.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
@@ -60,7 +60,7 @@ let package = Package(
         ),
         // Slow end-to-end tests for scripts/build.sh, bundle.sh, release.sh.
         // Gated behind CCDECK_SLOW_TESTS=1 (skipped by plain `swift test`);
-        // run via `./scripts/test.sh --slow`.
+        // run via `./scripts/utils/test.sh --slow`.
         .testTarget(
             name: "ccdeckScriptTests",
             path: "Tests/ccdeckScriptTests"
