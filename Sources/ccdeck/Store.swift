@@ -10,9 +10,13 @@ final class Store {
     nonisolated(unsafe) private var db: OpaquePointer?
 
     static let dbURL: URL = {
+        // "ccdeck" in production, "ccdeck-dev" in the dev variant — a dev build
+        // gets its own roster/settings database.
+        let dirName = (Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false)
+            ? "ccdeck-dev" : "ccdeck"
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ccdeck", isDirectory: true)
+            .appendingPathComponent(dirName, isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base.appendingPathComponent("ccdeck.sqlite")
     }()

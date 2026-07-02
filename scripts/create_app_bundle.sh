@@ -20,29 +20,34 @@ cd "$(dirname "$0")/.."
 # CFBundleName/DisplayName that Finder, /Applications, and the Login Items "App
 # Background Activity" list show.
 APP_NAME="ccdeck"
+# Variant knobs (set by scripts/build.sh): defaults produce the production app.
+APP_BUNDLE="${APP_BUNDLE:-CC Deck}"
+BUNDLE_ID="${BUNDLE_ID:-com.wzulfikar.ccdeck}"
 CONFIG="${1:-release}"
 
-# Build variant (env: VARIANT=dev|prod, default prod). Two variants coexist on one
-# machine because they use DIFFERENT bundle ids → different daemon labels → their
-# privileged helpers never collide. See docs/stay-awake-helper.md and
-# .work/lessons/. `dev` is for daily local iteration (sign with any identity);
-# `prod` is the exact id/name that ships via brew + dmg (release.sh uses it).
-VARIANT="${VARIANT:-prod}"
-case "$VARIANT" in
-prod)
-    APP_BUNDLE="CC Deck"
-    BUNDLE_ID="com.wzulfikar.ccdeck"
-    ;;
-dev)
-    APP_BUNDLE="CC Deck (Dev)"
-    BUNDLE_ID="com.wzulfikar.ccdeck-dev"
-    ;;
-*)
-    echo "error: VARIANT must be 'dev' or 'prod' (got '$VARIANT')" >&2
-    exit 1
-    ;;
-esac
-echo "==> variant: $VARIANT ($BUNDLE_ID)"
+# Optional VARIANT=dev|prod shortcut for running this script directly (build.sh
+# sets APP_BUNDLE/BUNDLE_ID via env instead and leaves VARIANT unset). Two variants
+# coexist on one machine because they use DIFFERENT bundle ids → different daemon
+# labels → their privileged helpers never collide. The dev id ends in ".dev" so the
+# app's Keychain service ("ccdeck-dev", derived from the bundle id) stays isolated.
+# See docs/stay-awake-helper.md and .work/lessons/.
+if [ -n "${VARIANT:-}" ]; then
+    case "$VARIANT" in
+    prod)
+        APP_BUNDLE="CC Deck"
+        BUNDLE_ID="com.wzulfikar.ccdeck"
+        ;;
+    dev)
+        APP_BUNDLE="CC Deck (dev)"
+        BUNDLE_ID="com.wzulfikar.ccdeck.dev"
+        ;;
+    *)
+        echo "error: VARIANT must be 'dev' or 'prod' (got '$VARIANT')" >&2
+        exit 1
+        ;;
+    esac
+fi
+echo "==> bundle: $APP_BUNDLE ($BUNDLE_ID)"
 
 # The helper's own bundle id is embedded into its binary as an __info_plist Mach-O
 # section at compile time (see Package.swift). Regenerate that plist for this
@@ -138,6 +143,12 @@ SPARKLE_FEED_URL="https://github.com/wzulfikar/ccdeck/releases/latest/download/a
 SPARKLE_PUBKEY="${SPARKLE_PUBLIC_KEY:-}"
 if [ -z "$SPARKLE_PUBKEY" ] && [ -f "Resources/sparkle_pubkey.txt" ]; then
     SPARKLE_PUBKEY="$(tr -d '[:space:]' <Resources/sparkle_pubkey.txt)"
+fi
+# Dev variant (SPARKLE_ENABLED=0): drop the feed entirely so a dev build can
+# never auto-update itself into the production app.
+if [ "${SPARKLE_ENABLED:-1}" != "1" ]; then
+    SPARKLE_PUBKEY=""
+    echo "==> Sparkle: disabled for this variant (SPARKLE_ENABLED=0)"
 fi
 SPARKLE_KEYS=""
 if [ -n "$SPARKLE_PUBKEY" ]; then

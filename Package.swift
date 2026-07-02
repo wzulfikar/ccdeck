@@ -58,5 +58,12 @@ let package = Package(
             dependencies: ["ccdeck"],
             path: "Tests/ccdeckTests"
         ),
+        // Slow end-to-end tests for scripts/build.sh, bundle.sh, release.sh.
+        // Gated behind CCDECK_SLOW_TESTS=1 (skipped by plain `swift test`);
+        // run via `./scripts/test.sh --slow`.
+        .testTarget(
+            name: "ccdeckScriptTests",
+            path: "Tests/ccdeckScriptTests"
+        ),
     ]
 )
