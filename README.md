@@ -10,12 +10,13 @@ fresh account when the current one hits its limit.
 
 **Menu bar preview**
 
-| **State**    | **Menu bar**                                        |
-| :----------- | :-------------------------------------------------- |
-| Idle         | ![Idle](docs/screenshots/ccdeckmenu1.png)           |
-| Usage >70%   | ![Usage over 70%](docs/screenshots/ccdeckmenu2.png) |
-| Stay awake   | ![Stay awake](docs/screenshots/ccdeckmenu3.png)     |
-| Show usage % | ![Show usage %](docs/screenshots/ccdeckmenu4.png)   |
+| **State**      | **Menu bar**                                               |
+| :------------- | :--------------------------------------------------------- |
+| Idle           | ![Idle](docs/screenshots/ccdeckmenu1.png)                  |
+| Usage >70%     | ![Usage over 70%](docs/screenshots/ccdeckmenu2.png)        |
+| Stay awake     | ![Stay awake](docs/screenshots/ccdeckmenu3.png)            |
+| Show usage %   | ![Show usage %](docs/screenshots/ccdeckmenu4.png)          |
+| Reset in 5 min | ![Reset soon](docs/screenshots/ccdeckmenu5-reset-soon.png) |
 
 > All accounts must be **your own paid subscriptions**. This is account management, not
 > a way around paying for what you use.
