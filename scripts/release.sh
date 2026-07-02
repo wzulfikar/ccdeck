@@ -82,7 +82,8 @@ APP="dist/$APP_BUNDLE.app"
 DMG="dist/$APP_NAME.dmg"
 
 # 1. Build + sign the bundle with the Developer ID identity (hardened runtime).
-CODESIGN_IDENTITY="$IDENTITY" VERSION="$VERSION" ./scripts/create_app_bundle.sh release
+#    VARIANT=prod is the default, but pin it so a release always ships the prod id.
+VARIANT=prod CODESIGN_IDENTITY="$IDENTITY" VERSION="$VERSION" ./scripts/create_app_bundle.sh release
 
 # 2. Notarize the .app (zip it for submission — notarytool wants a flat archive).
 echo "==> notarizing $APP"
