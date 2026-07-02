@@ -51,10 +51,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             Task { @MainActor in self?.applyStatusButton() }
         }
 
-        // Defer to the next runloop tick so the status button has been laid out and
-        // has a window to anchor against — showing it inline in didFinishLaunching can
-        // no-op because the button's frame/window isn't ready yet.
-        DispatchQueue.main.async { [weak self] in self?.showPopover() }
+        // Show the menu-bar window on launch — same code path as clicking the icon.
+        // Two things must hold first, and neither is ready this early in launch: the app
+        // must be active (activation is async), and the status item must have taken its
+        // slot in the menu bar. Show before the slot is assigned and the popover anchors
+        // to the button's still-at-origin window → it appears in the bottom-left corner.
+        // So poll every 100ms until both hold (button window off the origin == placed),
+        // then show once; give up after ~3s so a background launch doesn't spin forever.
+        showInitialWhenReady()
+    }
+
+    /// The status item's window sits at the screen origin until AppKit assigns it a
+    /// menu-bar slot; once placed it moves to the top-right. A non-zero origin.x is our
+    /// signal that the button can correctly anchor the popover.
+    private var statusButtonIsPlaced: Bool {
+        (statusItem.button?.window?.frame.origin.x ?? 0) > 0
+    }
+
+    private func showInitialWhenReady(deadline: Date = Date().addingTimeInterval(3)) {
+        guard !popover.isShown, Date() < deadline else { return }
+        if NSApp.isActive, statusButtonIsPlaced {
+            showPopover()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.showInitialWhenReady(deadline: deadline)
+        }
     }
 
     /// Clicking the Dock icon toggles the popover: close it if shown, open it otherwise.
@@ -81,7 +103,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // (the case on cold launch). Activate first, and surface the status-bar window so
         // it can anchor + become key.
         NSApp.activate(ignoringOtherApps: true)
-        button.window?.makeKeyAndOrderFront(nil)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }

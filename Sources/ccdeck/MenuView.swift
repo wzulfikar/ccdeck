@@ -35,6 +35,13 @@ func resetLine(next: (date: Date, account: String), weekly: (date: Date, account
     return line
 }
 
+/// Measured natural height of the settings block, used to animate the reveal clip
+/// from 0 → full without the content ever overlapping the SETTINGS header.
+private struct SettingsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct MenuView: View {
     @Bindable var model: AppModel
     @ObservedObject private var updater = AppUpdater.shared
@@ -49,6 +56,7 @@ struct MenuView: View {
     // animates the chevron's *position* when the layout reflows, which made it drift
     // away from the SETTINGS row mid-transition.
     @State private var chevronAngle: Double = 0
+    @State private var settingsHeight: CGFloat = 0
 
     /// App version from the bundle (e.g. "v0.1.0"), normalized to a leading "v".
     private var appVersion: String {
@@ -407,20 +415,32 @@ struct MenuView: View {
             }
             .buttonStyle(.plain)
 
-            if model.settingsExpanded {
-                // Clipped so the rows slide out from under the SETTINGS header
-                // (fade + drop down on expand, fade + slide up on collapse) rather
-                // than the whole popover appearing to move.
-                VStack(alignment: .leading, spacing: 8) {
-                    settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
-                    settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
-                    settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
-                    settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .clipped()
-                .animation(.easeInOut(duration: 0.2), value: model.settingsExpanded)
+            // The rows stay laid out at their natural height (measured below). Expanding
+            // animates a clip height 0 → full and fades in, so the content is revealed
+            // top-down (slide-down); collapsing reverses it (slide-up + fade). Because it's
+            // a clip, it never overlaps the SETTINGS header: no drift.
+            // Fallback to natural height (nil) until the first measurement lands, so the
+            // rows are never invisible when expanded.
+            let revealHeight: CGFloat? = model.settingsExpanded
+                ? (settingsHeight > 0 ? settingsHeight : nil)
+                : 0
+            VStack(alignment: .leading, spacing: 8) {
+                settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
+                settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
+                settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
+                settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: proxy.size.height, initial: true) { _, h in
+                        if h > 0 { settingsHeight = h }
+                    }
+            })
+            .frame(height: revealHeight, alignment: .top)
+            .opacity(model.settingsExpanded ? 1 : 0)
+            .clipped()
+            .animation(.easeInOut(duration: 0.2), value: model.settingsExpanded)
 
             updatesRow
 
