@@ -39,8 +39,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         popover.behavior = .transient
         popover.delegate = self
-        let host = NSHostingController(rootView: MenuView(model: model))
-        host.sizingOptions = [.preferredContentSize]
+        // NSPopover would run its own resize animation when contentSize changes; we drive
+        // the size ourselves frame-by-frame (below), so any built-in animation just fights
+        // ours. Keep it off so the popover snaps to whatever size we set each frame.
+        popover.animates = false
+        // We size the popover manually instead of using `.preferredContentSize`:
+        // NSHostingController's preferredContentSize does NOT sample intermediate frames of a
+        // SwiftUI `withAnimation` — it jumps to the final size. That left the window at the
+        // final height while the settings accordion was still mid-reveal (content overflowed
+        // / repositioned inside a wrong-sized window → the drift). MenuView measures its real
+        // rendered height with a GeometryReader, which fires every animation frame, and hands
+        // it back here so the window tracks the content exactly.
+        let host = NSHostingController(rootView: MenuView(model: model, onHeight: { [weak self] h in
+            guard let self, h > 0 else { return }
+            self.popover.contentSize = NSSize(width: 320, height: h)
+        }))
         popover.contentViewController = host
 
         trackStatusButton()  // keep icon label/color in sync with live usage

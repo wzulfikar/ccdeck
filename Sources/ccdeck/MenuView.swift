@@ -35,15 +35,13 @@ func resetLine(next: (date: Date, account: String), weekly: (date: Date, account
     return line
 }
 
-/// Measured natural height of the settings block, used to animate the reveal clip
-/// from 0 → full without the content ever overlapping the SETTINGS header.
-private struct SettingsHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
 
 struct MenuView: View {
     @Bindable var model: AppModel
+    /// Reports the view's real rendered height (fires every animation frame) so the host can
+    /// size the NSPopover window in lockstep with the settings accordion. Defaults to a no-op
+    /// for previews / callers that don't drive a popover.
+    var onHeight: (CGFloat) -> Void = { _ in }
     @ObservedObject private var updater = AppUpdater.shared
     @State private var hoveredEmail: String?
     @State private var pendingDelete: Account?
@@ -51,12 +49,7 @@ struct MenuView: View {
     @State private var statusCopied = false
     @State private var loginCode = ""
     @State private var showInfo = false
-    // Chevron rotation is kept in its own state so it can be animated in isolation.
-    // Deriving it straight from `settingsExpanded` inside an `.animation(value:)` also
-    // animates the chevron's *position* when the layout reflows, which made it drift
-    // away from the SETTINGS row mid-transition.
-    @State private var chevronAngle: Double = 0
-    @State private var settingsHeight: CGFloat = 0
+    @State private var showSettings = false
 
     /// App version from the bundle (e.g. "v0.1.0"), normalized to a leading "v".
     private var appVersion: String {
@@ -82,6 +75,16 @@ struct MenuView: View {
         }
         .padding(14)
         .frame(width: 320)
+        // Measure the real rendered height and push it to the host every frame. Because the
+        // settings reveal animates inside a `withAnimation` transaction, this GeometryReader
+        // re-fires each animation frame, so the popover window resizes in lockstep with the
+        // content instead of snapping to the final size (which `.preferredContentSize` did).
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onChange(of: proxy.size.height, initial: true) { _, h in
+                    onHeight(h)
+                }
+        })
         .alert("Remove account?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
@@ -115,6 +118,15 @@ struct MenuView: View {
                 .foregroundStyle(.secondary)
                 .help("About CC Deck")
                 .popover(isPresented: $showInfo, arrowEdge: .bottom) { infoPopover }
+                // Settings in a native popover so NSPopover owns the reveal animation
+                // instead of resizing the menu window inline.
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape").font(.callout)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Settings")
+                .popover(isPresented: $showSettings, arrowEdge: .bottom) { settingsPopover }
                 Spacer()
                 Text(appVersion).font(.caption2).foregroundStyle(.secondary)
             }
@@ -388,60 +400,6 @@ struct MenuView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                // Toggle the layout without a global withAnimation (that animates the whole
-                // popover as one transaction — the "whole window moves" bug). The block below
-                // animates itself via its own `.animation(value:)`; the chevron rotation is
-                // animated separately through `chevronAngle` so only the glyph spins.
-                model.settingsExpanded.toggle()
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    chevronAngle = model.settingsExpanded ? 90 : 0
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
-                    Spacer()
-                    // Single chevron rotated 0°→90° so the right→down / down→right flip
-                    // animates smoothly instead of hard-swapping two glyphs.
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        // Fixed square frame so rotating the glyph doesn't change the row
-                        // height (which made the chevron appear to "fly" up and down).
-                        .frame(width: 10, height: 10)
-                        .rotationEffect(.degrees(chevronAngle), anchor: .center)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            // The rows stay laid out at their natural height (measured below). Expanding
-            // animates a clip height 0 → full and fades in, so the content is revealed
-            // top-down (slide-down); collapsing reverses it (slide-up + fade). Because it's
-            // a clip, it never overlaps the SETTINGS header: no drift.
-            // Fallback to natural height (nil) until the first measurement lands, so the
-            // rows are never invisible when expanded.
-            let revealHeight: CGFloat? = model.settingsExpanded
-                ? (settingsHeight > 0 ? settingsHeight : nil)
-                : 0
-            VStack(alignment: .leading, spacing: 8) {
-                settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
-                settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
-                settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
-                settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .background(GeometryReader { proxy in
-                Color.clear
-                    .onChange(of: proxy.size.height, initial: true) { _, h in
-                        if h > 0 { settingsHeight = h }
-                    }
-            })
-            .frame(height: revealHeight, alignment: .top)
-            .opacity(model.settingsExpanded ? 1 : 0)
-            .clipped()
-            .animation(.easeInOut(duration: 0.2), value: model.settingsExpanded)
-
             updatesRow
 
             // Informational status sits on its own line above the buttons
@@ -506,6 +464,20 @@ struct MenuView: View {
                 Spacer()
             }
         }
+    }
+
+    /// Settings, presented in a native popover off the gear button. NSPopover owns the
+    /// open/close animation, so there's no inline window-resize to keep in sync.
+    private var settingsPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
+            settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
+            settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
+            settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
+            settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
+        }
+        .padding(16)
+        .frame(width: 280)
     }
 
     /// A label-left / switch-right settings row.
