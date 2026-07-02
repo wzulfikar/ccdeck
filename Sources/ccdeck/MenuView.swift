@@ -85,11 +85,15 @@ struct MenuView: View {
 
     // MARK: - Header
 
-    /// Title bar: info button (left), "ccdeck" (center), version (right). A ZStack keeps
+    /// Title bar: info button (left), "CC Deck" (center), version (right). A ZStack keeps
     /// the title truly centered regardless of the side items' widths.
     private var header: some View {
         ZStack {
-            Text("ccdeck").font(.headline)
+            #if DEBUG
+            Text("CC Deck (dev)").font(.headline)
+            #else
+            Text("CC Deck").font(.headline)
+            #endif
             HStack {
                 Button { showInfo = true } label: {
                     Image(systemName: "info.circle").font(.callout)

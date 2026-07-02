@@ -79,9 +79,7 @@ for the account identity), authenticated with the account's OAuth access token.
 **ccdeck** into Applications. The DMG is notarized and stapled, so Gatekeeper opens it with
 no warning. Stable direct link:
 
-```
-https://github.com/wzulfikar/ccdeck/releases/latest
-```
+https://github.com/wzulfikar/ccdeck/releases/latest/download/ccdeck.dmg
 
 **Homebrew**
 
