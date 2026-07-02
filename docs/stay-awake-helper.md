@@ -2,8 +2,11 @@
 
 The "Stay awake" button keeps the Mac awake in two layers:
 
-- **`StayAwake.swift`** (app target) — IOKit `kIOPMAssertionTypePreventSystemSleep`
-  power assertion. Blocks ordinary idle sleep. No privileges, no prompt.
+- **`StayAwake.swift`** (app target) — IOKit
+  `kIOPMAssertionTypePreventUserIdleSystemSleep` power assertion (`caffeinate -i`).
+  Blocks ordinary idle sleep on **AC and battery**. No privileges, no prompt.
+  (The `…PreventSystemSleep` / `caffeinate -s` variant is AC-only — on battery
+  macOS ignores it, so it must not be used here.)
 - **`ccdeck-helper`** — privileged root LaunchDaemon (registered via
   `SMAppService`). Runs `pmset -a disablesleep 0|1` so the Mac stays awake with
   the lid closed on battery (clamshell sleep is enforced below the assertion
@@ -93,3 +96,18 @@ the old one until reboot.
   first, then app, **no** `--deep`).
 - First toggle-on prompts a one-time approval in **System Settings ▸ Login
   Items**; silent thereafter.
+
+## Dev vs prod variants (avoiding daemon collisions)
+
+Never run two builds that share the bundle id `com.wzulfikar.ccdeck` (hence the
+daemon label `…ccdeck.helper`) but are signed by **different teams** on one
+machine — only one such daemon registers system-wide, and the helper rejects
+XPC clients whose team doesn't match the registrant's, so the "other" build's
+lid-close silently fails. This bit us with a personal-team `dist/` build vs the
+Klu-team brew build (see `.work/lessons/stay-awake-dev-prod-variant.md`).
+
+Fix: `create_app_bundle.sh` builds two **variants** via `VARIANT=dev|prod`
+(default `prod`). `dev` uses `com.wzulfikar.ccdeck-dev` → its own daemon label →
+coexists with the prod build. Ids are derived at runtime from
+`Bundle.main.bundleIdentifier` (see `HelperShared/HelperProtocol.swift`), so one
+source tree builds either. `release.sh` pins `VARIANT=prod`.

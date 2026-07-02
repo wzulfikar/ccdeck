@@ -13,7 +13,12 @@ enum KeychainError: Error { case status(OSStatus) }
 ///     keyed by the account email.
 enum Keychain {
     static let officialService = "Claude Code-credentials"
-    static let appService = "ccdeck"
+    /// "ccdeck" in production, "ccdeck-dev" in the dev variant (bundle id ends in
+    /// ".dev") — so running a dev build never touches the real account store.
+    /// Note: `officialService` is intentionally NOT isolated; there is only one
+    /// live Claude Code credential, and activating accounts is the app's job.
+    static let appService: String =
+        (Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false) ? "ccdeck-dev" : "ccdeck"
     static var officialAccount: String { NSUserName() }
 
     // MARK: - Primitives

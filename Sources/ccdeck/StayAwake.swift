@@ -1,12 +1,15 @@
 import IOKit.pwr_mgt
 
 /// Holds a system power assertion to keep the Mac awake — the in-process
-/// equivalent of `caffeinate -s`. The assertion uses
-/// `kIOPMAssertionTypePreventSystemSleep`: it blocks *idle* system sleep on AC
-/// and battery. It does NOT block lid-close (clamshell) sleep — no power
-/// assertion can; that requires `pmset disablesleep`, run as root by the
-/// privileged helper (see `HelperManager`/`ClamshellMonitor`). The display may
-/// still sleep. Releasing the assertion (or quitting) restores normal sleep.
+/// equivalent of `caffeinate -i`. The assertion uses
+/// `kIOPMAssertionTypePreventUserIdleSystemSleep`: it blocks *idle* system sleep
+/// on both AC and battery. (The stronger `kIOPMAssertionTypePreventSystemSleep`
+/// / `caffeinate -s` is honored on AC only — on battery macOS silently ignores
+/// it, which defeats the whole point on a laptop.) It does NOT block lid-close
+/// (clamshell) sleep — no power assertion can; that requires `pmset
+/// disablesleep`, run as root by the privileged helper (see
+/// `HelperManager`/`ClamshellMonitor`). The display may still sleep. Releasing
+/// the assertion (or quitting) restores normal sleep.
 final class StayAwake {
     private var assertionID: IOPMAssertionID = 0
     private(set) var isActive = false
@@ -16,7 +19,7 @@ final class StayAwake {
     func start(reason: String = "ccdeck keep-awake") -> Bool {
         guard !isActive else { return true }
         let result = IOPMAssertionCreateWithName(
-            kIOPMAssertionTypePreventSystemSleep as CFString,
+            kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
             reason as CFString,
             &assertionID
