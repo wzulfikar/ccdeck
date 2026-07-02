@@ -17,7 +17,7 @@
 #   - the "Stay awake" helper daemon (launchctl bootout — needs sudo, prod only)
 #   - the .app in /Applications
 #   - TCC privacy permissions (tccutil reset All <bundle-id>)
-#   - Keychain items under the app's service ("ccdeck" / "ccdeck-dev")
+#   - Keychain items under the app's service ("CC Deck" / "CC Deck (dev)")
 #   - ~/Library/Application Support/<ccdeck|ccdeck-dev>/  (SQLite roster + settings)
 #   - defaults / preferences (incl. Sparkle's SULastCheckTime etc.)
 #   - caches, HTTPStorages (Sparkle downloads), saved application state
@@ -149,8 +149,8 @@ reset_variant() {
 }
 
 # ----------------------------------------------------------------------- reset
-[ "$DEV" = 1 ]  && reset_variant "com.wzulfikar.ccdeck.dev" "CC Deck (dev)" "ccdeck-dev" "ccdeck-dev"
-[ "$PROD" = 1 ] && reset_variant "com.wzulfikar.ccdeck"     "CC Deck"       "ccdeck"     "ccdeck"
+[ "$DEV" = 1 ]  && reset_variant "com.wzulfikar.ccdeck.dev" "CC Deck (dev)" "CC Deck (dev)" "ccdeck-dev"
+[ "$PROD" = 1 ] && reset_variant "com.wzulfikar.ccdeck"     "CC Deck"       "CC Deck"       "ccdeck"
 
 # Local build artifacts (regenerable via build.sh).
 [ -d dist ] && act rm -rf dist

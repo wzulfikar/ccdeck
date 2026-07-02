@@ -40,7 +40,7 @@ fresh account when the current one hits its limit.
 
 Claude Code stores its OAuth token in the macOS Keychain under the service
 `Claude Code-credentials`. ccdeck keeps a copy of each account's credential blob under
-its own Keychain service (`ccdeck`) and, to "activate" an account, copies that blob into
+its own Keychain service (`CC Deck`) and, to "activate" an account, copies that blob into
 the official entry. Quota polling reads each account's stored token directly — it never has
 to switch accounts to read usage.
 

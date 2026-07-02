@@ -51,12 +51,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             Task { @MainActor in self?.applyStatusButton() }
         }
 
-        showPopover()        // show the menu-bar window on launch
+        // Defer to the next runloop tick so the status button has been laid out and
+        // has a window to anchor against — showing it inline in didFinishLaunching can
+        // no-op because the button's frame/window isn't ready yet.
+        DispatchQueue.main.async { [weak self] in self?.showPopover() }
     }
 
-    /// Clicking the Dock icon (whether or not a window is open) reopens the popover.
+    /// Clicking the Dock icon toggles the popover: close it if shown, open it otherwise.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        showPopover()
+        if popover.isShown { popover.performClose(nil) } else { showPopover() }
         return true
     }
 
@@ -74,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func showPopover() {
         guard let button = statusItem.button else { return }
+        // A `.transient` popover silently refuses to appear while the app isn't active
+        // (the case on cold launch). Activate first, and surface the status-bar window so
+        // it can anchor + become key.
+        NSApp.activate(ignoringOtherApps: true)
+        button.window?.makeKeyAndOrderFront(nil)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }

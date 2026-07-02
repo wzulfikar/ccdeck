@@ -9,6 +9,17 @@ struct RetryPolicyTests {
         #expect(RetryPolicy.interval == 5)
     }
 
+    @Test("Retry delay jitters around the base interval to break lockstep")
+    func delayJitter() {
+        // Extremes of the ±40% window, driven by an injected rng.
+        #expect(RetryPolicy.delay(rng: { 0.6 }) == 3.0)
+        #expect(RetryPolicy.delay(rng: { 1.0 }) == 5.0)
+        #expect(RetryPolicy.delay(rng: { 1.4 }) == 7.0)
+        // Default rng stays within the window.
+        let d = RetryPolicy.delay()
+        #expect(d >= 3.0 && d <= 7.0)
+    }
+
     @Test("Keeps retrying until the last attempt, then stops")
     func shouldRetry() {
         #expect(RetryPolicy.shouldRetry(afterAttempt: 1))

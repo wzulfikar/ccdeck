@@ -17,7 +17,7 @@ build.sh ──▶ bundle.sh ──▶ release.sh        scripts/utils/reset.sh
 | Bundle ID | `com.wzulfikar.ccdeck.dev` | `com.wzulfikar.ccdeck` |
 | Config | debug (fast) | release |
 | Sparkle | **disabled** — a dev build must never auto-update itself into prod | enabled |
-| Keychain service | `ccdeck-dev` | `ccdeck` |
+| Keychain service | `CC Deck (dev)` | `CC Deck` |
 | App Support dir | `ccdeck-dev/` | `ccdeck/` |
 | Signing | `ccdeck-dev` self-signed cert if present, else ad-hoc | `CODESIGN_IDENTITY` env, else ad-hoc |
 
@@ -60,7 +60,7 @@ Two reliability changes vs. the old release.sh:
 
 ### `./scripts/utils/reset.sh [--dev|--prod] [--official-creds] [--dry-run] [--yes]`
 
-Returns the machine to a pre-ccdeck state — "developing from day one." Resets both variants by default; `--dev` / `--prod` narrows it. Per variant it: quits the running app (graceful, then kill by bundle path so it never takes down the *other* variant), boots out the "Stay awake" helper daemon (sudo, prod only), resets **TCC privacy permissions** (`tccutil reset All <bundle-id>`), deletes the app from `/Applications`, purges the app's **Keychain service** items (`ccdeck` / `ccdeck-dev`, looped until empty), and removes Application Support data, `defaults` (incl. Sparkle's update-check state), caches, HTTPStorages, and saved application state. Then it clears `dist/`.
+Returns the machine to a pre-ccdeck state — "developing from day one." Resets both variants by default; `--dev` / `--prod` narrows it. Per variant it: quits the running app (graceful, then kill by bundle path so it never takes down the *other* variant), boots out the "Stay awake" helper daemon (sudo, prod only), resets **TCC privacy permissions** (`tccutil reset All <bundle-id>`), deletes the app from `/Applications`, purges the app's **Keychain service** items (`CC Deck` / `CC Deck (dev)`, looped until empty), and removes Application Support data, `defaults` (incl. Sparkle's update-check state), caches, HTTPStorages, and saved application state. Then it clears `dist/`.
 
 Safety rails:
 
@@ -90,7 +90,7 @@ What it verifies (never notarizes, never publishes):
 
 Separate bundle IDs alone wouldn't isolate anything — two values were hardcoded:
 
-- `Keychain.appService` → now `ccdeck-dev` when the bundle ID ends in `.dev`. **Deliberate exception:** `officialService` ("Claude Code-credentials") stays shared, because there's only one live Claude Code credential and switching it is the app's whole purpose. Consequence: activating an account from the dev app changes the real active account. If you ever want a fully inert dev mode, that's the next thing to gate.
+- `Keychain.appService` → now `CC Deck (dev)` when the bundle ID ends in `.dev`. **Deliberate exception:** `officialService` ("Claude Code-credentials") stays shared, because there's only one live Claude Code credential and switching it is the app's whole purpose. Consequence: activating an account from the dev app changes the real active account. If you ever want a fully inert dev mode, that's the next thing to gate.
 - `Store.dbURL` → dev builds get `Application Support/ccdeck-dev/`.
 
 Also `scripts/utils/create_app_bundle.sh` now takes `APP_BUNDLE` / `BUNDLE_ID` / `SPARKLE_ENABLED` from the environment (defaults unchanged = prod), which is how `build.sh` stays a thin wrapper.

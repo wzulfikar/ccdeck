@@ -44,6 +44,11 @@ struct MenuView: View {
     @State private var statusCopied = false
     @State private var loginCode = ""
     @State private var showInfo = false
+    // Chevron rotation is kept in its own state so it can be animated in isolation.
+    // Deriving it straight from `settingsExpanded` inside an `.animation(value:)` also
+    // animates the chevron's *position* when the layout reflows, which made it drift
+    // away from the SETTINGS row mid-transition.
+    @State private var chevronAngle: Double = 0
 
     /// App version from the bundle (e.g. "v0.1.0"), normalized to a leading "v".
     private var appVersion: String {
@@ -345,15 +350,17 @@ struct MenuView: View {
     @ViewBuilder
     private var combinedSection: some View {
         let c = model.combined
-        if c.hasData {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("COMBINED CAPACITY").font(.caption2.bold()).foregroundStyle(.secondary)
-                    Spacer()
-                    // Total capacity up front, then the account count it spans.
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("COMBINED CAPACITY").font(.caption2.bold()).foregroundStyle(.secondary)
+                Spacer()
+                // Total capacity up front, then the account count it spans.
+                if c.hasData {
                     Text("\(Int(c.total))% (\(c.accountsWithData) account\(c.accountsWithData == 1 ? "" : "s"))")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
+            }
+            if c.hasData {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
                 if let next = model.nextReset {
@@ -361,6 +368,10 @@ struct MenuView: View {
                         .font(.caption2)
                         .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
                 }
+            } else {
+                // Fetch failed / nothing cached yet: keep the section labels so the
+                // layout is stable, just note the meter has nothing to show.
+                Text("Data not available").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -369,11 +380,47 @@ struct MenuView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
+            Button {
+                // Toggle the layout without a global withAnimation (that animates the whole
+                // popover as one transaction — the "whole window moves" bug). The block below
+                // animates itself via its own `.animation(value:)`; the chevron rotation is
+                // animated separately through `chevronAngle` so only the glyph spins.
+                model.settingsExpanded.toggle()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    chevronAngle = model.settingsExpanded ? 90 : 0
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
+                    Spacer()
+                    // Single chevron rotated 0°→90° so the right→down / down→right flip
+                    // animates smoothly instead of hard-swapping two glyphs.
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                        // Fixed square frame so rotating the glyph doesn't change the row
+                        // height (which made the chevron appear to "fly" up and down).
+                        .frame(width: 10, height: 10)
+                        .rotationEffect(.degrees(chevronAngle), anchor: .center)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
-            settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
-            settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
-            settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
+            if model.settingsExpanded {
+                // Clipped so the rows slide out from under the SETTINGS header
+                // (fade + drop down on expand, fade + slide up on collapse) rather
+                // than the whole popover appearing to move.
+                VStack(alignment: .leading, spacing: 8) {
+                    settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
+                    settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
+                    settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
+                    settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .clipped()
+                .animation(.easeInOut(duration: 0.2), value: model.settingsExpanded)
+            }
 
             updatesRow
 

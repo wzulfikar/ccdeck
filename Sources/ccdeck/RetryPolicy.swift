@@ -7,8 +7,15 @@ import Foundation
 enum RetryPolicy {
     /// Total fetch attempts on first load (the initial try plus retries).
     static let maxAttempts = 10
-    /// Delay between attempts.
+    /// Base delay between attempts.
     static let interval: TimeInterval = 5
+
+    /// Delay before the next attempt, with random jitter. Multiple accounts that fail on the
+    /// same cold-start burst would otherwise retry in lockstep and collide into 429s again;
+    /// spreading each retry over `interval ± 40%` breaks that synchronization.
+    static func delay(rng: () -> Double = { Double.random(in: 0.6...1.4) }) -> TimeInterval {
+        interval * rng()
+    }
 
     /// Whether another attempt should follow the one that just failed.
     static func shouldRetry(afterAttempt attempt: Int) -> Bool {

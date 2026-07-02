@@ -8,7 +8,7 @@
 #
 # Dev variant: bundle id com.wzulfikar.ccdeck.dev, debug config, Sparkle disabled
 # (a dev build must never auto-update itself into prod). The app derives its
-# Keychain service ("ccdeck-dev") and Application Support dir from the bundle id,
+# Keychain service ("CC Deck (dev)") and Application Support dir from the bundle id,
 # so it is safe to run side by side with the installed production app.
 #
 # Prod variant: bundle id com.wzulfikar.ccdeck, release config, Sparkle enabled.

@@ -25,6 +25,17 @@ final class AppModel {
     var showUsageInMenuBar: Bool {
         didSet { store.setSetting("showUsageInMenuBar", showUsageInMenuBar ? "1" : "0") }
     }
+    // After a switch, running `claude` processes keep the old token in memory (the CLI
+    // caches its credential per-process). Killing the Zed ACP adapter forces Zed to
+    // restart it, so the next prompt re-reads the freshly swapped Keychain entry.
+    var restartAcpOnSwitch: Bool {
+        didSet { store.setSetting("restartAcpOnSwitch", restartAcpOnSwitch ? "1" : "0") }
+    }
+    // Whether the SETTINGS section is expanded. Persisted so it survives menu-bar
+    // window reopens (the view's @State would reset on each recreation).
+    var settingsExpanded: Bool {
+        didSet { store.setSetting("settingsExpanded", settingsExpanded ? "1" : "0") }
+    }
     // Launch-at-login via SMAppService. Truth lives in the registration status, not our
     // store — so we mirror the real state on init and toggle the app's login item on change.
     var startAtLoginEnabled: Bool {
@@ -52,7 +63,7 @@ final class AppModel {
 
     private let store: Store
     private var timer: Timer?
-    private let pollInterval: TimeInterval = 60
+    private let pollInterval: TimeInterval = 30
     private var loginWatch: Task<Void, Never>?
     private(set) var isAwaitingLogin = false
 
@@ -67,6 +78,8 @@ final class AppModel {
         self.store = store
         self.autoSwitchEnabled = store.getSetting("autoSwitch") == "1"
         self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") == "1"  // default off
+        self.restartAcpOnSwitch = store.getSetting("restartAcpOnSwitch") == "1"  // default off
+        self.settingsExpanded = store.getSetting("settingsExpanded") == "1"  // default off
         self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
@@ -92,8 +105,12 @@ final class AppModel {
     func start() {
         guard timer == nil else { return }
         // First load retries with backoff so a cold-start 429 recovers on its own instead of
-        // stranding a "Fetch failed" the user has to click. The 60s poll below stays single-shot.
-        for account in accounts { scheduleInitialLoad(account) }
+        // stranding a "Fetch failed" the user has to click. The 30s poll below stays single-shot.
+        // Stagger cold-start fetches: firing every account at once bursts the usage endpoint
+        // and trips per-IP 429s. While running, refreshAll() is already sequential so it's fine.
+        for (i, account) in accounts.enumerated() {
+            scheduleInitialLoad(account, delay: Double(i) * 2)
+        }
         let t = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.tick() }
         }
@@ -104,10 +121,12 @@ final class AppModel {
     /// First-load fetch for one account: retry on a fixed interval up to `RetryPolicy`'s cap,
     /// showing "…. Retrying…" between tries, then leave a bare (tappable) error if it never
     /// succeeds. `loadingEmails` marks it as loading throughout so the menu bar pulses.
-    private func scheduleInitialLoad(_ account: Account) {
+    private func scheduleInitialLoad(_ account: Account, delay: TimeInterval = 0) {
         let email = account.email
         retryTasks[email]?.cancel()
         retryTasks[email] = Task { @MainActor [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            if Task.isCancelled { return }
             await self?.loadWithRetry(account)
             self?.retryTasks[email] = nil
         }
@@ -128,7 +147,7 @@ final class AppModel {
             }
             guard RetryPolicy.shouldRetry(afterAttempt: attempt) else { break }
             errorByEmail[email] = RetryPolicy.retryingMessage(base: errorByEmail[email] ?? "Fetch failed")
-            try? await Task.sleep(for: .seconds(RetryPolicy.interval))
+            try? await Task.sleep(for: .seconds(RetryPolicy.delay()))
         }
         lastRefresh = Date()                          // gave up — bare error stays for tap-to-retry
     }
@@ -361,9 +380,34 @@ final class AppModel {
             }
             activeEmail = email
             store.setSetting("activeEmail", email)
-            statusMessage = "Switched to \(label(for: email)). Applies to new sessions."
+            if restartAcpOnSwitch {
+                let killed = restartClaudeAcp()
+                statusMessage = killed
+                    ? "Switched to \(label(for: email)). Restarted Claude ACP."
+                    : "Switched to \(label(for: email)). Applies to new sessions."
+            } else {
+                statusMessage = "Switched to \(label(for: email)). Applies to new sessions."
+            }
         } catch {
             statusMessage = "Switch failed: \(error)"
+        }
+    }
+
+    /// Kill the Zed Claude Code ACP adapter so its host restarts it against the
+    /// freshly swapped credential. Equivalent to `pkill -f claude-code-acp`.
+    /// Returns true if at least one process matched.
+    @discardableResult
+    private func restartClaudeAcp() -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-f", "claude-code-acp"]
+        do {
+            try p.run()
+            p.waitUntilExit()
+            // pkill exits 0 when a process was signalled, 1 when none matched.
+            return p.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 
