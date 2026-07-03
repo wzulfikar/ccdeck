@@ -47,7 +47,9 @@ final class AppModel {
     private var suppressLoginItemUpdate = false
     let threshold: Double = 90
 
-    // Keep-awake (caffeinate -s equivalent). Not persisted — resets on launch.
+    // Keep-awake (caffeinate -s equivalent). Persisted so an app relaunch —
+    // e.g. `brew upgrade ccdeck` — re-establishes it instead of silently
+    // dropping the assertion (see restoreStayAwake, called from start()).
     private let stayAwake = StayAwake()
     private let clamshell = ClamshellMonitor()
     private(set) var shouldStayAwake = false
@@ -83,6 +85,7 @@ final class AppModel {
         self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
+        self.shouldStayAwake = store.getSetting("stayAwake") == "1"  // default off
         detectActiveFromKeychain()
     }
 
@@ -104,6 +107,7 @@ final class AppModel {
 
     func start() {
         guard timer == nil else { return }
+        restoreStayAwake()
         // First load retries with backoff so a cold-start 429 recovers on its own instead of
         // stranding a "Fetch failed" the user has to click. The 30s poll below stays single-shot.
         // Stagger cold-start fetches: firing every account at once bursts the usage endpoint
@@ -161,6 +165,7 @@ final class AppModel {
     func toggleStayAwake() {
         let target = !shouldStayAwake
         shouldStayAwake = target
+        store.setSetting("stayAwake", target ? "1" : "0")
         statusMessage = ""
         // Power assertion handles idle sleep instantly, no privileges needed.
         if target {
@@ -177,6 +182,20 @@ final class AppModel {
             clamshell.stop()
             cancelApprovalWait()
             Task { try? await HelperManager.shared.setDisableSleep(false) }
+        }
+    }
+
+    /// Re-establish keep-awake on launch if it was on when we last quit — the
+    /// in-process assertion and pmset suppression die with the old process (e.g.
+    /// on `brew upgrade`), so we rebuild them. Never prompts: the helper was set
+    /// up when the user first enabled it, so we only re-apply if it's ready.
+    private func restoreStayAwake() {
+        guard shouldStayAwake else { return }
+        stayAwake.start()
+        clamshell.onLidClosed = { DisplayControl.sleepNow() }
+        clamshell.start()
+        if HelperManager.shared.state == .ready {
+            Task { await applyDisableSleep(true) }
         }
     }
 
@@ -270,6 +289,7 @@ final class AppModel {
     /// unregister the daemon (drops it from System Settings ▸ Login Items).
     func removeStayAwakeHelper() {
         shouldStayAwake = false
+        store.setSetting("stayAwake", "0")
         stayAwake.stop()
         clamshell.stop()
         cancelApprovalWait()
@@ -619,9 +639,16 @@ final class AppModel {
     /// worst window). Single wiring point — see `MenuBarStyle.presentation`.
     private var menuBarPresentation: MenuBarStyle.Presentation {
         let u = activeEmail.flatMap { usageByEmail[$0] }
-        return MenuBarStyle.presentation(fiveHourPct: u?.fiveHourPct, sevenDayPct: u?.sevenDayPct,
+        var fiveHour = u?.fiveHourPct
+        var sevenDay = u?.sevenDayPct
+        var loading = menuBarIsLoading
+        // Screenshot stubs: force a fixed usage state regardless of live data. Applied in
+        // ascending severity so listing both leaves the icon in the rate-limited state.
+        if Mock.menubar70Pct { fiveHour = 70; sevenDay = max(sevenDay ?? 0, 70); loading = false }
+        if Mock.menubarRateLimited { fiveHour = 100; sevenDay = 100; loading = false }
+        return MenuBarStyle.presentation(fiveHourPct: fiveHour, sevenDayPct: sevenDay,
                                          showUsage: showUsageInMenuBar, stayAwake: shouldStayAwake,
-                                         isLoading: menuBarIsLoading)
+                                         isLoading: loading)
     }
 
     /// Compact menu-bar label: active account's 5-hour %, or a dash if unknown.

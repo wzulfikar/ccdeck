@@ -44,6 +44,10 @@ final class AppUpdater: ObservableObject {
         isBrewManaged = Self.detectBrewInstall()
         let hasFeed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil
 
+        // Stub: pretend a newer release exists so the header update arrow is testable
+        // without an actual upstream bump. See `Mock` / `CCDECK_MOCK`.
+        if Mock.fakeUpdate { availableUpdate = "9.9.9" }
+
         if isBrewManaged || !hasFeed {
             controller = nil
             isActive = false
