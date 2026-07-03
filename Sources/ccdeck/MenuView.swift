@@ -50,6 +50,8 @@ struct MenuView: View {
     @State private var loginCode = ""
     @State private var showInfo = false
     @State private var showSettings = false
+    @State private var showUpdate = false
+    @State private var brewCmdCopied = false
 
     /// App version from the bundle (e.g. "v0.1.0"), normalized to a leading "v".
     private var appVersion: String {
@@ -128,6 +130,18 @@ struct MenuView: View {
                 .help("Settings")
                 .popover(isPresented: $showSettings, arrowEdge: .bottom) { settingsPopover }
                 Spacer()
+                // Down-arrow sits just before the version when a newer build exists
+                // upstream (brew installs only — Sparkle handles it otherwise). Tap for
+                // the `brew upgrade` hint; nothing is downloaded here.
+                if let latest = updater.availableUpdate {
+                    Button { showUpdate = true } label: {
+                        Image(systemName: "arrow.down.circle.fill").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.blue)
+                    .help("Update available: v\(latest)")
+                    .popover(isPresented: $showUpdate, arrowEdge: .bottom) { updatePopover(latest) }
+                }
                 Text(appVersion).font(.caption2).foregroundStyle(.secondary)
             }
         }
@@ -156,6 +170,46 @@ struct MenuView: View {
         }
         .padding(16)
         .frame(width: 300)
+    }
+
+    /// Shown off the header down-arrow when a newer build exists upstream. Brew installs
+    /// don't auto-update, so this just tells the user the command to run (with a copy button).
+    private func updatePopover(_ latest: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Update available").font(.title3.bold())
+            Text("v\(latest) is available. You're on \(appVersion).")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Run this to upgrade:")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("brew upgrade ccdeck")
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(.vertical, 4).padding(.horizontal, 8)
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                Spacer()
+                Button { copyBrewCommand() } label: {
+                    Image(systemName: brewCmdCopied ? "checkmark" : "doc.on.doc")
+                        .foregroundStyle(brewCmdCopied ? Color.green : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy command")
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+
+    /// Copy `brew upgrade ccdeck` to the clipboard and flash a checkmark for 2s.
+    private func copyBrewCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("brew upgrade ccdeck", forType: .string)
+        brewCmdCopied = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            brewCmdCopied = false
+        }
     }
 
     private var emptyState: some View {
