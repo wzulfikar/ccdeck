@@ -316,8 +316,13 @@ final class AppModel {
                                                 expiresAt: refreshed.expiresAt) {
                 try? Keychain.storeBlob(email: account.email, blob: newBlob)
                 creds = OAuthCreds.parse(newBlob) ?? creds
-                // Keep the live entry fresh too if this is the active account.
-                if account.email == activeEmail { try? Keychain.activate(email: account.email) }
+                // Deliberately do NOT push this into the live `Claude Code-credentials`
+                // entry. That refreshed token is only for our own usage fetch (stored
+                // above). Writing the official entry here (a) resets its Keychain ACL,
+                // re-prompting `security`/`claude` on every subsequent read, and
+                // (b) burns the rotating refresh token out from under Claude Code,
+                // which can force a re-login. The live entry is Claude Code's to manage;
+                // we only touch it on an explicit user switch (see `switch`/`activate`).
             }
         }
 
