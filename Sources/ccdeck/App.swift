@@ -29,9 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // schedule starts (no-op for Homebrew installs / when no feed is configured).
         _ = AppUpdater.shared
 
-        // Regular policy → Dock icon is visible and clickable.
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        // Regular policy → Dock icon is visible and clickable; `.accessory` hides it.
+        // Respects the "Show icon in dock" setting (default on).
+        model.applyDockIconVisibility()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.action = #selector(togglePopover(_:))

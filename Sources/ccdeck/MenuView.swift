@@ -529,6 +529,7 @@ struct MenuView: View {
             settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
             settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
+            settingToggle("Show icon in dock", isOn: $model.showDockIcon)
         }
         .padding(16)
         .frame(width: 280)

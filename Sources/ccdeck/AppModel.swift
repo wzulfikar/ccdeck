@@ -25,6 +25,13 @@ final class AppModel {
     var showUsageInMenuBar: Bool {
         didSet { store.setSetting("showUsageInMenuBar", showUsageInMenuBar ? "1" : "0") }
     }
+    // Dock icon visibility. `.regular` shows it, `.accessory` hides it (menu-bar item stays).
+    var showDockIcon: Bool {
+        didSet {
+            store.setSetting("showDockIcon", showDockIcon ? "1" : "0")
+            applyDockIconVisibility()
+        }
+    }
     // After a switch, running `claude` processes keep the old token in memory (the CLI
     // caches its credential per-process). Killing the Zed ACP adapter forces Zed to
     // restart it, so the next prompt re-reads the freshly swapped Keychain entry.
@@ -80,6 +87,7 @@ final class AppModel {
         self.store = store
         self.autoSwitchEnabled = store.getSetting("autoSwitch") == "1"
         self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") == "1"  // default off
+        self.showDockIcon = store.getSetting("showDockIcon") != "0"  // default on
         self.restartAcpOnSwitch = store.getSetting("restartAcpOnSwitch") == "1"  // default off
         self.settingsExpanded = store.getSetting("settingsExpanded") == "1"  // default off
         self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
@@ -101,6 +109,14 @@ final class AppModel {
             startAtLoginEnabled.toggle()
             suppressLoginItemUpdate = false
         }
+    }
+
+    /// Show/hide the Dock icon by switching the activation policy. `.accessory` keeps the
+    /// menu-bar item and popover working while dropping the Dock tile; re-activate when
+    /// switching back so the newly shown icon takes focus.
+    func applyDockIconVisibility() {
+        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        if showDockIcon { NSApp.activate(ignoringOtherApps: true) }
     }
 
     // MARK: - Lifecycle
@@ -425,7 +441,11 @@ final class AppModel {
     private func restartClaudeAcp() -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        p.arguments = ["-f", "claude-code-acp"]
+        // Match both adapters Zed has shipped: the older standalone `claude-code-acp`
+        // and the current `@anthropic-ai/claude-agent-sdk` binary (path contains
+        // `claude-agent-sdk`). macOS pkill treats the pattern as an extended regex,
+        // so alternation works. `-f` matches against the full argument list.
+        p.arguments = ["-f", "claude-code-acp|claude-agent-sdk"]
         do {
             try p.run()
             p.waitUntilExit()
