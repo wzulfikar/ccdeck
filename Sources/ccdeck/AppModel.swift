@@ -513,11 +513,13 @@ final class AppModel {
         watchForNewLogin(preToken: preToken, knownTokens: knownTokens)
     }
 
-    /// Opens the sign-in URL in the default browser (once) and surfaces it in the UI.
+    /// Surfaces the sign-in URL in the UI (once). We deliberately do *not* open the
+    /// browser here: `claude auth login` opens it itself, so opening again would
+    /// spawn a second, duplicate tab. The URL is shown so the user can open it
+    /// manually if Claude's auto-open ever fails.
     private func presentLoginURL(_ url: URL) {
         guard loginURL == nil else { return }
         loginURL = url
-        NSWorkspace.shared.open(url)
         statusMessage = "Authorize in your browser — capturing automatically."
     }
 

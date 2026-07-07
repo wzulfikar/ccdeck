@@ -236,8 +236,14 @@ struct MenuView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(model.loginURL == nil ? "Opening sign-in page…" : "Authorize in your browser…")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    if let url = model.loginURL {
+                        // Claude opens the browser itself; this is a manual fallback.
+                        Link("Authorize in your browser…", destination: url)
+                            .font(.caption2)
+                    } else {
+                        Text("Opening sign-in page…")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button("Cancel") { model.cancelAddAccount() }
                         .buttonStyle(.borderless).font(.caption2)
