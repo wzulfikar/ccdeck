@@ -58,6 +58,44 @@ enum Keychain {
         }
     }
 
+    /// Update an existing generic-password item's data **in place**, preserving its
+    /// Keychain ACL (the list of apps trusted to read it without a prompt).
+    ///
+    /// `SecItemUpdate` rewrites the item's access object as a side effect, dropping
+    /// every app but the writer from the trust list — so after a switch `claude`
+    /// re-prompts on its next keychain read (the new-chat "allow" dance). The legacy
+    /// `SecKeychainItemModifyContent` edits the data of the existing item without
+    /// touching its `SecAccess`, so Claude Code's own trust survives and the read
+    /// stays silent.
+    ///
+    /// Login-keychain only by design: the item Claude Code writes lives there, and
+    /// only the legacy file-based keychain has a per-app trusted-app ACL. The modern
+    /// data-protection keychain gates access by code-signing, not a runtime list, so
+    /// there is nothing to preserve — hence the deprecated `SecKeychain*` calls.
+    ///
+    /// Returns false when no matching item exists (caller falls back to an add, which
+    /// necessarily starts a fresh ACL).
+    @discardableResult
+    static func updatePreservingACL(service: String, account: String, value: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var ref: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess,
+              let item = ref, CFGetTypeID(item) == SecKeychainItemGetTypeID() else { return false }
+        // Safe: the type-id check above confirms this is a legacy SecKeychainItem.
+        let keychainItem = item as! SecKeychainItem
+        let data = Data(value.utf8)
+        let status = data.withUnsafeBytes { raw in
+            SecKeychainItemModifyContent(keychainItem, nil, UInt32(data.count), raw.baseAddress)
+        }
+        return status == errSecSuccess
+    }
+
     static func delete(service: String, account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -106,6 +144,12 @@ enum Keychain {
     /// verbatim. Only affects sessions launched *after* this point.
     static func activate(email: String) throws {
         guard let blob = storedBlob(email: email) else { throw KeychainError.status(errSecItemNotFound) }
-        try write(service: officialService, account: officialAccount, value: blob)
+        // Preserve the live entry's ACL so Claude Code keeps silent read access — a
+        // plain `write` (SecItemUpdate) would reset it and re-prompt on the next read.
+        // Fall back to write only when the entry doesn't exist yet (fresh machine,
+        // before Claude Code has created it), where there is no ACL to preserve.
+        if !updatePreservingACL(service: officialService, account: officialAccount, value: blob) {
+            try write(service: officialService, account: officialAccount, value: blob)
+        }
     }
 }
