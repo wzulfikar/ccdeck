@@ -57,7 +57,7 @@ struct OAuthCreds: Sendable {
 }
 
 /// One quota reading for an account (the two windows we care about).
-struct Usage: Sendable, Equatable {
+struct Usage: Sendable, Equatable, Codable {
     var fiveHourPct: Double
     var fiveHourResets: Date?
     var sevenDayPct: Double

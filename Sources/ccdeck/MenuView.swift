@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Charts
 
 /// Coarse "time until reset" label. Shows only the largest unit: days (no hours),
 /// hours (no minutes), or minutes (no seconds) — e.g. "4 days", "23 hrs", "26 min".
@@ -458,29 +459,14 @@ struct MenuView: View {
                 // stable, just note the meter has nothing to show.
                 Text("Data not available").font(.caption).foregroundStyle(.secondary)
             }
-            // Tokens today comes from scanning local JSONL — no auth required — so
-            // it renders independently of the meters above. Only hide it when there's
-            // truly no token data and no scan running.
+            // Tokens usage comes from scanning local JSONL — no auth required — so it
+            // renders independently of the meters above. Only hide it when there's truly
+            // no token data and no scan running.
             if model.tokensToday != nil || model.isScanningTokens {
-                HStack {
-                    Text("Tokens today").font(.caption)
-                    Spacer()
-                    if let t = model.tokensToday {
-                        // Stale value stays visible while a fresh scan runs. Append the
-                        // equivalent API cost once prices have loaded (models.dev).
-                        let tokens = formatTokens(t.total)
-                        let label = model.costTodayUSD.map { "\(tokens) (\(formatCost($0)))" } ?? tokens
-                        Text(label).font(.caption.monospacedDigit())
-                    } else {
-                        Text("scanning…").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .help(model.tokensToday.map { t in
-                    "Across all Claude Code sessions since midnight — \(t.messages) messages.\nInput \(formatTokens(t.input)) · Output \(formatTokens(t.output)) · Cache write \(formatTokens(t.cacheCreate)) · Cache read \(formatTokens(t.cacheRead))"
-                } ?? "")
-                // Extra gap so the reset line below reads as its own footnote rather
-                // than part of the tokens row.
-                .padding(.bottom, 4)
+                usageSection
+                    // Extra gap so the reset line below reads as its own footnote rather
+                    // than part of the usage block.
+                    .padding(.bottom, 12)
             }
             if c.hasData, let next = model.nextReset {
                 Text(resetLine(next: next, weekly: model.nextWeeklyReset))
@@ -489,6 +475,47 @@ struct MenuView: View {
             }
         }
     }
+
+    // MARK: - Tokens usage (chart + delta)
+
+    // Tapping anywhere in this block — header, summary, or chart — cycles the window
+    // (today → 7-day → 30-day). The summary line and chart re-derive from the selection.
+    @ViewBuilder
+    private var usageSection: some View {
+        let w = model.usageWindow
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(w.title).font(.caption.bold())
+                Spacer()
+                if let s = model.usageSummary {
+                    Text(usageSummaryText(s)).font(.caption.monospacedDigit().bold())
+                } else if model.tokensToday != nil {
+                    Text(formatTokens(model.tokensToday!.total)).font(.caption.monospacedDigit().bold())
+                } else {
+                    Text("scanning…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            UsageChart(bars: model.usageBars, unit: w.barUnit, domain: model.usageDomain)
+                .frame(height: 90)
+                // Gap so the chart reads as its own block, not glued to the header row.
+                .padding(.top, 14)
+        }
+        // Whole block is one tap target; hovering a bar still shows its per-model tooltip.
+        .contentShape(Rectangle())
+        .onTapGesture { model.cycleUsageWindow() }
+        .help("Click to cycle: today → 7-day → 30-day")
+    }
+
+    /// "135M / $116 / +30%" — cost omitted until prices load, delta until a baseline exists.
+    private func usageSummaryText(_ s: UsageSummary) -> String {
+        var parts = [formatTokens(s.tokens)]
+        if let c = s.cost { parts.append(formatCost(c)) }
+        if let d = s.deltaPct { parts.append((d >= 0 ? "+" : "-") + percentText(abs(d))) }
+        return parts.joined(separator: " / ")
+    }
+
+    private func percentText(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded()))%" }
 
     // MARK: - Controls
 
@@ -590,6 +617,162 @@ struct MenuView: View {
 
 /// A labeled progress bar for one quota window. `value`/`total` lets it show either a
 /// single account (0–100) or combined capacity (0–N×100, e.g. 139 / 200).
+/// Token-volume bar chart, stacked by model. X axis adapts to the window: hourly ticks
+/// for today (label every 6h), daily ticks for the 7/30-day windows.
+private struct UsageChart: View {
+    let bars: [UsageBar]
+    let unit: Calendar.Component
+    let domain: ClosedRange<Date>?
+    // Bucket-start (local hour/day) the cursor is over, for the hover tooltip.
+    @State private var hovered: Date?
+    // Distinct buckets, to size the daily-tick stride without counting stacked segments.
+    private var bucketCount: Int { Set(bars.map(\.date)).count }
+    private static let axisFont = Font.system(size: 8)
+    // Stack palette (accent first). Charts cycles it across models.
+    private static let palette: [Color] = [.accentColor, .orange, .purple, .teal, .pink, .green]
+
+    // Sorted, de-duped display names — a stable domain so a model keeps the same colour
+    // across the chart, legend, and tooltip regardless of which bucket it first appears in.
+    private var models: [String] { Array(Set(bars.map { shortModelName($0.model) })).sorted() }
+    private var colors: [Color] { models.indices.map { Self.palette[$0 % Self.palette.count] } }
+    private func color(_ model: String) -> Color {
+        models.firstIndex(of: model).map { colors[$0] } ?? .accentColor
+    }
+
+    var body: some View {
+        if bars.isEmpty {
+            Text("No usage data")
+                .font(.caption2).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 60)
+        } else {
+            Chart(bars) { bar in
+                BarMark(
+                    x: .value("Time", bar.date, unit: unit),
+                    y: .value("Tokens", bar.tokens)
+                )
+                .foregroundStyle(by: .value("Model", shortModelName(bar.model)))
+                // Dim the other buckets while hovering one.
+                .opacity(hovered == nil || hovered == bar.date ? 1 : 0.35)
+            }
+            .chartForegroundStyleScale(domain: models, range: colors)
+            .chartXScale(domain: domain ?? Date()...Date())
+            .chartXAxis { xAxis }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                    if let v = value.as(Int.self) {
+                        AxisValueLabel { Text(formatTokens(v)).font(Self.axisFont) }
+                    }
+                }
+            }
+            .chartLegend(position: .bottom, alignment: .center, spacing: 4)
+            .chartOverlay { proxy in
+                ZStack {
+                    hoverCatcher(proxy)
+                    // Above the bars, but transparent to hits so the catcher below keeps
+                    // receiving hover as the cursor moves under the card.
+                    tooltipOverlay(proxy).allowsHitTesting(false)
+                }
+            }
+            // Shrinks the legend labels; axis labels keep their explicit 8pt above.
+            .font(.system(size: 9))
+        }
+    }
+
+    // Transparent layer over the plot that maps cursor x → the bucket under it.
+    private func hoverCatcher(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geo in
+            if let anchor = proxy.plotFrame {
+                let plot = geo[anchor]
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        guard case .active(let loc) = phase,
+                              let date = proxy.value(atX: loc.x - plot.minX, as: Date.self)
+                        else { hovered = nil; return }
+                        hovered = bucketStart(date)
+                    }
+            }
+        }
+    }
+
+    // The floating card: date + per-model breakdown for the hovered bucket. Positioned at
+    // that bucket's x, clamped inside the plot so it never spills off the popover edge.
+    @ViewBuilder
+    private func tooltipOverlay(_ proxy: ChartProxy) -> some View {
+        if let b = hovered {
+            let items = bars.filter { $0.date == b && $0.tokens > 0 }.sorted { $0.tokens > $1.tokens }
+            if !items.isEmpty {
+                GeometryReader { geo in
+                    let plot = proxy.plotFrame.map { geo[$0] } ?? geo.frame(in: .local)
+                    let cx = (proxy.position(forX: b) ?? 0) + plot.minX
+                    tooltipCard(bucket: b, items: items)
+                        .frame(width: 132)
+                        .position(x: min(max(cx, 66 + plot.minX), plot.maxX - 66), y: 4)
+                        .fixedSize()
+                }
+            }
+        }
+    }
+
+    private func tooltipCard(bucket: Date, items: [UsageBar]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(tooltipDate(bucket)).font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+            ForEach(items) { item in
+                let name = shortModelName(item.model)
+                HStack(spacing: 4) {
+                    Circle().fill(color(name)).frame(width: 6, height: 6)
+                    Text(name).font(.system(size: 9))
+                    Spacer(minLength: 6)
+                    Text(formatTokens(item.tokens)).font(.system(size: 9).monospacedDigit())
+                }
+            }
+        }
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)))
+    }
+
+    private func bucketStart(_ d: Date) -> Date {
+        let cal = Calendar.current
+        if unit == .day { return cal.startOfDay(for: d) }
+        return cal.date(from: cal.dateComponents([.year, .month, .day, .hour], from: d)) ?? d
+    }
+
+    private func tooltipDate(_ d: Date) -> String {
+        let cal = Calendar.current
+        if unit == .hour {
+            let h = cal.component(.hour, from: d)
+            return String(format: "%02d:00–%02d:00", h, (h + 1) % 24)
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d"
+        return f.string(from: d)
+    }
+
+    // Hourly: tick every 6h ("00", "06", …). Daily: ~5 evenly-spaced day labels.
+    @AxisContentBuilder
+    private var xAxis: some AxisContent {
+        if unit == .hour {
+            AxisMarks(values: .stride(by: .hour, count: 6)) { value in
+                // 24-hour labels (00/06/12/18); the FormatStyle variant renders 12-hour.
+                AxisValueLabel {
+                    if let d = value.as(Date.self) {
+                        Text(String(format: "%02d", Calendar.current.component(.hour, from: d)))
+                            .font(Self.axisFont)
+                    }
+                }
+            }
+        } else {
+            AxisMarks(values: .stride(by: .day, count: max(1, bucketCount / 5))) { _ in
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    .font(Self.axisFont)
+            }
+        }
+    }
+}
+
 private struct GaugeRow: View {
     let title: String
     let value: Double

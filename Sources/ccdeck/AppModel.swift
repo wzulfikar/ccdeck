@@ -21,6 +21,21 @@ final class AppModel {
     private(set) var tokensToday: TokenUsageToday?
     private(set) var isScanningTokens = false
     private var lastTokenScan: Date?
+    // Which span the tokens row + chart show. Cycles today → 7-day → 30-day on click.
+    // Persisted so it survives popover reopens.
+    var usageWindow: UsageWindow {
+        didSet {
+            store.setSetting("usageWindow", usageWindow.rawValue)
+            recomputeUsage()
+        }
+    }
+    // Derived from the hourly_usage history for `usageWindow`, recomputed after each scan
+    // and on window change. `usageBars` drives the chart; `usageSummary` the tokens/cost/
+    // delta line. Both nil until history has been read at least once.
+    private(set) var usageBars: [UsageBar] = []
+    private(set) var usageSummary: UsageSummary?
+    // Fixed x-axis span for the chart so empty leading/trailing buckets don't shrink it.
+    private(set) var usageDomain: ClosedRange<Date>?
     // Anthropic model prices (per MTok) from models.dev, keyed by model id. Cached in the
     // Store and revalidated on launch (stale-while-revalidate). Empty until first fetch;
     // costTodayUSD stays nil while empty so the UI just omits the "~$" suffix.
@@ -101,9 +116,18 @@ final class AppModel {
         self.showDockIcon = store.getSetting("showDockIcon") != "0"  // default on
         self.restartAcpOnSwitch = store.getSetting("restartAcpOnSwitch") == "1"  // default off
         self.settingsExpanded = store.getSetting("settingsExpanded") == "1"  // default off
+        self.usageWindow = store.getSetting("usageWindow").flatMap(UsageWindow.init) ?? .today
         self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
+        // Restore the last usage readings so combined capacity + per-account gauges render
+        // instantly on open — stale-while-revalidate. The 30s poll (and cold-start loads)
+        // overwrite each with fresh data. If a fetch fails or is still in flight, the cached
+        // value stays on screen instead of collapsing to "Data not available".
+        if let json = store.getSetting("usageByEmail")?.data(using: .utf8),
+           let cached = try? JSONDecoder().decode([String: Usage].self, from: json) {
+            self.usageByEmail = cached
+        }
         self.shouldStayAwake = store.getSetting("stayAwake") == "1"  // default off
         // Restore the last token total — but only if it's from today; a value stamped
         // on an earlier day would show yesterday's number until the rescan lands.
@@ -149,6 +173,17 @@ final class AppModel {
         guard timer == nil else { return }
         restoreStayAwake()
         Task { @MainActor in await refreshPrices() }
+        // Seed the usage history once from existing transcripts, then render the chart from
+        // whatever's stored. Backfill is a full-tree walk so it runs off the main actor and
+        // only the first launch after this feature ships pays for it.
+        Task { @MainActor in
+            if store.getSetting("historyBackfilled") != "1" {
+                let rows = await TokenUsageScanner.shared.backfillHistory()
+                store.insertHours(rows)
+                store.setSetting("historyBackfilled", "1")
+            }
+            recomputeUsage()
+        }
         // First load retries with backoff so a cold-start 429 recovers on its own instead of
         // stranding a "Fetch failed" the user has to click. The 30s poll below stays single-shot.
         // Stagger cold-start fetches: firing every account at once bursts the usage endpoint
@@ -362,11 +397,99 @@ final class AppModel {
         lastTokenScan = Date()
         isScanningTokens = true
         defer { isScanningTokens = false }
-        let fresh = await TokenUsageScanner.shared.scanToday()
-        tokensToday = fresh
-        if let json = try? JSONEncoder().encode(fresh), let s = String(data: json, encoding: .utf8) {
+        let scan = await TokenUsageScanner.shared.scanToday()
+        tokensToday = scan.today
+        if let json = try? JSONEncoder().encode(scan.today), let s = String(data: json, encoding: .utf8) {
             store.setSetting("tokensToday", s)
         }
+        // Mirror today's hour buckets into history, replacing today's rows so a restart
+        // (which re-scans today from scratch) can't double-count. Prune past the 60-day cap.
+        let dayStart = Calendar.current.startOfDay(for: Date())
+        let fromEpoch = Int(dayStart.timeIntervalSince1970) / 3600 * 3600
+        let rows = scan.hourly.flatMap { hour, models in
+            models.map { HourlyRow(hourEpoch: hour, model: $0.key, tokens: $0.value) }
+        }
+        store.replaceHours(fromEpoch: fromEpoch, rows: rows)
+        store.pruneHours(beforeEpoch: Int(Date().addingTimeInterval(-61 * 86_400).timeIntervalSince1970))
+        recomputeUsage()
+    }
+
+    // MARK: - Usage history (chart + delta)
+
+    /// Rebuild `usageBars` and `usageSummary` for the selected window from the history
+    /// store: the chart series (bucket-filled), the window token/cost totals, and the
+    /// percent delta against the equal-length window immediately before it.
+    private func recomputeUsage(now: Date = Date()) {
+        let cal = Calendar.current
+        let (start, end) = usageWindow.range(now: now, cal: cal)
+        let unit = usageWindow.barUnit
+
+        let curRows = store.hourlyRows(fromEpoch: epoch(start), toEpoch: epoch(end) + 1)
+        usageBars = bars(curRows, from: start, to: end, unit: unit, cal: cal)
+        // End the domain at the start of tomorrow so the final bar (a full hour/day wide)
+        // sits entirely inside the plot instead of overflowing past "now". For today this
+        // also yields the full 24h axis (00/06/12/18).
+        let domainEnd = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: end)) ?? end
+        usageDomain = bucketStart(start, unit: unit, cal: cal)...domainEnd
+
+        let curTokens = curRows.reduce(0) { $0 + $1.tokens.total }
+        let curCost = cost(curRows)
+
+        // Previous equal-length window, shifted back by the window's span.
+        let shift = usageWindow.shiftDays
+        let pStart = cal.date(byAdding: .day, value: -shift, to: start) ?? start
+        let pEnd = cal.date(byAdding: .day, value: -shift, to: end) ?? end
+        let prevRows = store.hourlyRows(fromEpoch: epoch(pStart), toEpoch: epoch(pEnd) + 1)
+        let prevTokens = prevRows.reduce(0) { $0 + $1.tokens.total }
+        // Only show a delta when the baseline window is fully covered by recorded history.
+        // Otherwise (e.g. 30-day delta on a fresh install with <60 days of data) the prior
+        // period is truncated and the percentage is meaningless — often thousands of %.
+        let baselineCovered = (store.earliestHourEpoch() ?? .max) <= epoch(pStart)
+        let delta = (baselineCovered && prevTokens > 0)
+            ? (Double(curTokens - prevTokens) / Double(prevTokens)) : nil
+
+        usageSummary = UsageSummary(tokens: curTokens, cost: curCost, deltaPct: delta)
+    }
+
+    func cycleUsageWindow() { usageWindow = usageWindow.next }
+
+    private func epoch(_ d: Date) -> Int { Int(d.timeIntervalSince1970) }
+
+    /// Fold rows into (local bucket, model) segments for a stacked bar chart. Empty buckets
+    /// emit nothing — the pinned x-domain (`usageDomain`) keeps the axis contiguous.
+    private func bars(
+        _ rows: [HourlyRow], from start: Date, to end: Date,
+        unit: Calendar.Component, cal: Calendar
+    ) -> [UsageBar] {
+        var sums: [Date: [String: Int]] = [:]
+        for r in rows {
+            let d = Date(timeIntervalSince1970: TimeInterval(r.hourEpoch))
+            let key = bucketStart(d, unit: unit, cal: cal)
+            sums[key, default: [:]][r.model, default: 0] += r.tokens.total
+        }
+        return sums.flatMap { date, models in
+            models.compactMap { $0.value > 0 ? UsageBar(date: date, model: $0.key, tokens: $0.value) : nil }
+        }
+    }
+
+    private func bucketStart(_ d: Date, unit: Calendar.Component, cal: Calendar) -> Date {
+        if unit == .day { return cal.startOfDay(for: d) }
+        return cal.date(from: cal.dateComponents([.year, .month, .day, .hour], from: d)) ?? d
+    }
+
+    /// Equivalent pay-as-you-go API cost of a set of rows, priced per model. `nil` when
+    /// prices haven't loaded yet — the UI then omits the cost segment.
+    private func cost(_ rows: [HourlyRow]) -> Double? {
+        guard !modelPrices.isEmpty else { return nil }
+        var sum = 0.0
+        for r in rows {
+            guard let c = modelPrices[r.model] else { continue }
+            sum += (Double(r.tokens.input) * c.input
+                  + Double(r.tokens.output) * c.output
+                  + Double(r.tokens.cacheCreate) * c.cacheWrite
+                  + Double(r.tokens.cacheRead) * c.cacheRead) / 1_000_000
+        }
+        return sum
     }
 
     /// Refresh the models.dev price table. Best-effort: on any failure the cached table
@@ -377,6 +500,7 @@ final class AppModel {
         if let json = try? JSONEncoder().encode(fresh), let s = String(data: json, encoding: .utf8) {
             store.setSetting("modelPrices", s)
         }
+        recomputeUsage()   // cost segment can now be priced
     }
 
     /// Equivalent pay-as-you-go API cost of today's tokens, priced per model from the
@@ -404,6 +528,15 @@ final class AppModel {
         errorByEmail[email] = nil            // clear so the UI shows "loading…" mid-retry
         await refresh(account)
         autoSwitchIfNeeded()
+    }
+
+    /// Snapshot the current usage readings to the Store so they survive a quit/relaunch
+    /// (stale-while-revalidate — see the restore in init). Cheap: a handful of accounts.
+    private func persistUsage() {
+        if let json = try? JSONEncoder().encode(usageByEmail),
+           let s = String(data: json, encoding: .utf8) {
+            store.setSetting("usageByEmail", s)
+        }
     }
 
     private func refresh(_ account: Account) async {
@@ -436,6 +569,7 @@ final class AppModel {
             let usage = try await OAuthClient.fetchUsage(accessToken: creds.accessToken)
             usageByEmail[account.email] = usage
             errorByEmail[account.email] = nil
+            persistUsage()
         } catch OAuthError.unauthorized {
             errorByEmail[account.email] = "needs re-login"
         } catch let OAuthError.http(code) {
@@ -701,6 +835,7 @@ final class AppModel {
         accounts = store.listAccounts()
         usageByEmail[email] = nil
         errorByEmail[email] = nil
+        persistUsage()   // drop the removed account from the cached snapshot too
         if activeEmail == email { activeEmail = nil }
     }
 
