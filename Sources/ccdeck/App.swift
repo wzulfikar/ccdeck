@@ -118,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+        // Stale-while-revalidate the token total: any persisted value is already on
+        // screen; kick a fresh scan now that the user is looking.
+        Task { @MainActor in await model.refreshTokenUsage() }
     }
 
     /// The status message is transient flash feedback (e.g. "Captured: …"),
