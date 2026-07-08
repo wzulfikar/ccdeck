@@ -21,6 +21,10 @@ final class AppModel {
     private(set) var tokensToday: TokenUsageToday?
     private(set) var isScanningTokens = false
     private var lastTokenScan: Date?
+    // Anthropic model prices (per MTok) from models.dev, keyed by model id. Cached in the
+    // Store and revalidated on launch (stale-while-revalidate). Empty until first fetch;
+    // costTodayUSD stays nil while empty so the UI just omits the "~$" suffix.
+    private(set) var modelPrices: [String: ModelCost] = [:]
     private(set) var activeEmail: String?
     private(set) var lastRefresh: Date?
     var statusMessage: String = ""
@@ -108,6 +112,12 @@ final class AppModel {
            cached.day == Calendar.current.startOfDay(for: Date()) {
             self.tokensToday = cached
         }
+        // Restore the last price table so cost renders instantly on open; start() kicks a
+        // fresh fetch to revalidate.
+        if let json = store.getSetting("modelPrices")?.data(using: .utf8),
+           let cached = try? JSONDecoder().decode([String: ModelCost].self, from: json) {
+            self.modelPrices = cached
+        }
         detectActiveFromKeychain()
     }
 
@@ -138,6 +148,7 @@ final class AppModel {
     func start() {
         guard timer == nil else { return }
         restoreStayAwake()
+        Task { @MainActor in await refreshPrices() }
         // First load retries with backoff so a cold-start 429 recovers on its own instead of
         // stranding a "Fetch failed" the user has to click. The 30s poll below stays single-shot.
         // Stagger cold-start fetches: firing every account at once bursts the usage endpoint
@@ -356,6 +367,33 @@ final class AppModel {
         if let json = try? JSONEncoder().encode(fresh), let s = String(data: json, encoding: .utf8) {
             store.setSetting("tokensToday", s)
         }
+    }
+
+    /// Refresh the models.dev price table. Best-effort: on any failure the cached table
+    /// (loaded in init) stays in use. Called once per launch from start().
+    func refreshPrices() async {
+        guard let fresh = try? await PricingClient.fetch(), !fresh.isEmpty else { return }
+        modelPrices = fresh
+        if let json = try? JSONEncoder().encode(fresh), let s = String(data: json, encoding: .utf8) {
+            store.setSetting("modelPrices", s)
+        }
+    }
+
+    /// Equivalent pay-as-you-go API cost of today's tokens, priced per model from the
+    /// models.dev table. `nil` when prices haven't loaded or no per-model breakdown exists
+    /// (e.g. a total restored from a pre-pricing build) — the UI then omits the "~$" suffix.
+    var costTodayUSD: Double? {
+        guard !modelPrices.isEmpty, let byModel = tokensToday?.byModel, !byModel.isEmpty
+        else { return nil }
+        var sum = 0.0
+        for (model, mt) in byModel {
+            guard let c = modelPrices[model] else { continue }  // unknown model → skip
+            sum += (Double(mt.input) * c.input
+                  + Double(mt.output) * c.output
+                  + Double(mt.cacheCreate) * c.cacheWrite
+                  + Double(mt.cacheRead) * c.cacheRead) / 1_000_000
+        }
+        return sum
     }
 
     /// Manual single-account retry — backs the tappable error label so a transient

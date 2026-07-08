@@ -10,6 +10,11 @@ struct TokenUsageToday: Sendable, Equatable, Codable {
     var cacheCreate = 0
     var cacheRead = 0
     var messages = 0
+    /// Per-Claude-model token breakdown, keyed by the transcript's `message.model`
+    /// (e.g. "claude-opus-4-8"). Kept alongside the aggregate so equivalent API cost
+    /// can be priced per model — different models bill at very different rates. Optional
+    /// for backward-compat: a value persisted by an older build decodes with this nil.
+    var byModel: [String: ModelTokens]? = [:]
     /// Local-midnight this total is for — lets a persisted value be discarded when
     /// reloaded on a later day instead of shown as stale.
     var day: Date = Calendar.current.startOfDay(for: Date())
@@ -17,6 +22,14 @@ struct TokenUsageToday: Sendable, Equatable, Codable {
     /// Everything the model processed: fresh input + output + cache writes + cache
     /// reads. Cache reads usually dominate, so this reads much larger than "new" work.
     var total: Int { input + output + cacheCreate + cacheRead }
+}
+
+/// Token counts for a single Claude model, split by billing category.
+struct ModelTokens: Sendable, Equatable, Codable {
+    var input = 0
+    var output = 0
+    var cacheCreate = 0
+    var cacheRead = 0
 }
 
 /// Sums today's token usage from `~/.claude/projects/**/*.jsonl` — Claude Code's
@@ -93,11 +106,22 @@ actor TokenUsageScanner {
 
                 guard let msg = obj["message"] as? [String: Any],
                       let u = msg["usage"] as? [String: Any] else { continue }
-                totals.input += (u["input_tokens"] as? Int) ?? 0
-                totals.output += (u["output_tokens"] as? Int) ?? 0
-                totals.cacheCreate += (u["cache_creation_input_tokens"] as? Int) ?? 0
-                totals.cacheRead += (u["cache_read_input_tokens"] as? Int) ?? 0
+                let inTok = (u["input_tokens"] as? Int) ?? 0
+                let outTok = (u["output_tokens"] as? Int) ?? 0
+                let cwTok = (u["cache_creation_input_tokens"] as? Int) ?? 0
+                let crTok = (u["cache_read_input_tokens"] as? Int) ?? 0
+                totals.input += inTok
+                totals.output += outTok
+                totals.cacheCreate += cwTok
+                totals.cacheRead += crTok
                 totals.messages += 1
+                // Per-model split for equivalent-cost pricing. Fall back to a stable
+                // "unknown" bucket if the line has no model (priced as $0 — skipped).
+                let model = (msg["model"] as? String) ?? "unknown"
+                var mt = totals.byModel?[model] ?? ModelTokens()
+                mt.input += inTok; mt.output += outTok
+                mt.cacheCreate += cwTok; mt.cacheRead += crTok
+                totals.byModel?[model] = mt
             }
         }
         return totals

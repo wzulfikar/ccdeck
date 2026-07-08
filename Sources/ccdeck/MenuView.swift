@@ -452,30 +452,40 @@ struct MenuView: View {
             if c.hasData {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
+            } else {
+                // Meters depend on the usage fetch (auth). Fetch failed / nothing
+                // cached / auth still in progress: keep the label so the layout is
+                // stable, just note the meter has nothing to show.
+                Text("Data not available").font(.caption).foregroundStyle(.secondary)
+            }
+            // Tokens today comes from scanning local JSONL — no auth required — so
+            // it renders independently of the meters above. Only hide it when there's
+            // truly no token data and no scan running.
+            if model.tokensToday != nil || model.isScanningTokens {
                 HStack {
-                    Text("Tokens today").font(.caption2).foregroundStyle(.secondary)
+                    Text("Tokens today").font(.caption)
                     Spacer()
                     if let t = model.tokensToday {
-                        // Stale value stays visible while a fresh scan runs.
-                        Text(formatTokens(t.total)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                    } else if model.isScanningTokens {
-                        Text("scanning…").font(.caption2).foregroundStyle(.secondary)
+                        // Stale value stays visible while a fresh scan runs. Append the
+                        // equivalent API cost once prices have loaded (models.dev).
+                        let tokens = formatTokens(t.total)
+                        let label = model.costTodayUSD.map { "\(tokens) (\(formatCost($0)))" } ?? tokens
+                        Text(label).font(.caption.monospacedDigit())
                     } else {
-                        Text("—").font(.caption2).foregroundStyle(.secondary)
+                        Text("scanning…").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .help(model.tokensToday.map { t in
                     "Across all Claude Code sessions since midnight — \(t.messages) messages.\nInput \(formatTokens(t.input)) · Output \(formatTokens(t.output)) · Cache write \(formatTokens(t.cacheCreate)) · Cache read \(formatTokens(t.cacheRead))"
                 } ?? "")
-                if let next = model.nextReset {
-                    Text(resetLine(next: next, weekly: model.nextWeeklyReset))
-                        .font(.caption2)
-                        .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
-                }
-            } else {
-                // Fetch failed / nothing cached yet: keep the section labels so the
-                // layout is stable, just note the meter has nothing to show.
-                Text("Data not available").font(.caption).foregroundStyle(.secondary)
+                // Extra gap so the reset line below reads as its own footnote rather
+                // than part of the tokens row.
+                .padding(.bottom, 4)
+            }
+            if c.hasData, let next = model.nextReset {
+                Text(resetLine(next: next, weekly: model.nextWeeklyReset))
+                    .font(.caption2)
+                    .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
             }
         }
     }
