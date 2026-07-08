@@ -441,14 +441,20 @@ final class AppModel {
         let pEnd = cal.date(byAdding: .day, value: -shift, to: end) ?? end
         let prevRows = store.hourlyRows(fromEpoch: epoch(pStart), toEpoch: epoch(pEnd) + 1)
         let prevTokens = prevRows.reduce(0) { $0 + $1.tokens.total }
-        // Only show a delta when the baseline window is fully covered by recorded history.
-        // Otherwise (e.g. 30-day delta on a fresh install with <60 days of data) the prior
-        // period is truncated and the percentage is meaningless — often thousands of %.
         let baselineCovered = (store.earliestHourEpoch() ?? .max) <= epoch(pStart)
-        let delta = (baselineCovered && prevTokens > 0)
-            ? (Double(curTokens - prevTokens) / Double(prevTokens)) : nil
+        let delta = Self.deltaPct(cur: curTokens, prev: prevTokens, baselineCovered: baselineCovered)
 
         usageSummary = UsageSummary(tokens: curTokens, cost: curCost, deltaPct: delta)
+    }
+
+    /// Fractional change of the current window vs. the previous equal-length one, or nil to
+    /// hide the delta. We suppress it unless the baseline window is fully covered by recorded
+    /// history — otherwise (e.g. a 30-day delta on a fresh install with <60 days of data) the
+    /// prior period is truncated and the percentage is meaningless, often thousands of %. Also
+    /// nil when the baseline is zero (division would blow up / read as ∞%).
+    nonisolated static func deltaPct(cur: Int, prev: Int, baselineCovered: Bool) -> Double? {
+        guard baselineCovered, prev > 0 else { return nil }
+        return Double(cur - prev) / Double(prev)
     }
 
     func cycleUsageWindow() { usageWindow = usageWindow.next }

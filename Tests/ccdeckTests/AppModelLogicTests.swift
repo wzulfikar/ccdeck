@@ -53,4 +53,25 @@ struct AppModelLogicTests {
         #expect(AppModel.applyRefresh(to: "not json", accessToken: "a",
                                       refreshToken: "b", expiresAt: Date()) == nil)
     }
+
+    // MARK: - deltaPct (usage window vs. previous period)
+
+    @Test("Positive and negative change relative to the baseline")
+    func deltaMagnitude() {
+        #expect(AppModel.deltaPct(cur: 130, prev: 100, baselineCovered: true) == 0.30)
+        #expect(AppModel.deltaPct(cur: 50, prev: 100, baselineCovered: true) == -0.50)
+        #expect(AppModel.deltaPct(cur: 100, prev: 100, baselineCovered: true) == 0.0)
+    }
+
+    @Test("Nil when the baseline window isn't fully covered by history")
+    func deltaHiddenWhenBaselineTruncated() {
+        // Would otherwise read as +∞% off a partial prior period.
+        #expect(AppModel.deltaPct(cur: 500, prev: 1, baselineCovered: false) == nil)
+    }
+
+    @Test("Nil when the baseline is zero (no prior usage to compare against)")
+    func deltaHiddenWhenBaselineZero() {
+        #expect(AppModel.deltaPct(cur: 500, prev: 0, baselineCovered: true) == nil)
+        #expect(AppModel.deltaPct(cur: 0, prev: 0, baselineCovered: true) == nil)
+    }
 }
