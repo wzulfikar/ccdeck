@@ -73,6 +73,13 @@ for the account identity), authenticated with the account's OAuth access token.
 - **Token refresh is best-effort.** Background polling refreshes expired tokens via the
   OAuth token endpoint; if that fails, the account is flagged for re-login.
 
+## Known Quirks
+
+- **Zed editor: rate-limit stop + account switch breaks the thread.** If Claude agent
+  stops due to rate limit and you switch accounts with ccdeck, you won't be able to
+  directly send e.g. "continue" to resume that thread. Workaround: create a new thread,
+  then go back to the old thread and press continue.
+
 ## Install
 
 **Direct download (no Homebrew)** — grab the latest `.dmg` from the

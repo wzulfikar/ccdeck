@@ -5,7 +5,9 @@ import AppKit
 /// hours (no minutes), or minutes (no seconds) — e.g. "4 days", "23 hrs", "26 min".
 func relativeReset(_ date: Date, now: Date = Date()) -> String {
     let secs = date.timeIntervalSince(now)
-    if secs <= 0 { return "now" }
+    // Under a minute out (or already due) collapses to "soon" — avoids "reset in
+    // now" and a "1 min" that lingers well past the actual reset.
+    if secs < 60 { return "soon" }
     if secs >= 86400 {
         let d = Int(secs / 86400)
         return "\(d) day\(d == 1 ? "" : "s")"
@@ -14,7 +16,14 @@ func relativeReset(_ date: Date, now: Date = Date()) -> String {
         let h = Int(secs / 3600)
         return "\(h) hr\(h == 1 ? "" : "s")"
     }
-    return "\(max(1, Int(secs / 60))) min"
+    return "\(Int(secs / 60)) min"
+}
+
+/// "reset in X" phrase, collapsing to "reset soon" when under a minute out so it
+/// never reads "reset in soon".
+func resetIn(_ date: Date, now: Date = Date()) -> String {
+    let label = relativeReset(date, now: now)
+    return label == "soon" ? "reset soon" : "reset in \(label)"
 }
 
 /// A reset is "urgent" (shown in orange) when it lands within the next hour.
@@ -26,11 +35,11 @@ func isResetUrgent(_ date: Date, now: Date = Date()) -> Bool {
 /// "Next reset in … (Name)" plus a "Weekly reset in … (Name)." tail when a distinct
 /// 7-day reset exists (skipped when the soonest reset is already the weekly one).
 func resetLine(next: (date: Date, account: String), weekly: (date: Date, account: String)?) -> String {
-    var line = "Next reset in \(relativeReset(next.date)) (\(next.account))"
+    var line = "Next \(resetIn(next.date)) (\(next.account))"
     if let weekly, weekly.date != next.date {
         // Only tag the weekly account when it differs from the next-reset account.
         let tag = weekly.account == next.account ? "" : " (\(weekly.account))"
-        line += ". Weekly reset in \(relativeReset(weekly.date))\(tag)."
+        line += ". Weekly \(resetIn(weekly.date))\(tag)."
     }
     return line
 }
@@ -320,7 +329,7 @@ struct MenuView: View {
             // exhausted account shows its 7-day reset instead — that's what gates it.
             if !isActive, let u = model.usageByEmail[acct.email],
                let reset = u.sevenDayPct >= 100 ? u.sevenDayResets : u.fiveHourResets {
-                Text("reset in \(relativeReset(reset))")
+                Text(resetIn(reset))
                     .font(.caption2)
                     .foregroundStyle(isResetUrgent(reset) ? .orange : .secondary)
                     .lineLimit(1)
@@ -443,6 +452,21 @@ struct MenuView: View {
             if c.hasData {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
+                HStack {
+                    Text("Tokens today").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    if let t = model.tokensToday {
+                        // Stale value stays visible while a fresh scan runs.
+                        Text(formatTokens(t.total)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    } else if model.isScanningTokens {
+                        Text("scanning…").font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text("—").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .help(model.tokensToday.map { t in
+                    "Across all Claude Code sessions since midnight — \(t.messages) messages.\nInput \(formatTokens(t.input)) · Output \(formatTokens(t.output)) · Cache write \(formatTokens(t.cacheCreate)) · Cache read \(formatTokens(t.cacheRead))"
+                } ?? "")
                 if let next = model.nextReset {
                     Text(resetLine(next: next, weekly: model.nextWeeklyReset))
                         .font(.caption2)
@@ -580,7 +604,7 @@ private struct GaugeRow: View {
                 Text(title).font(.caption)
                 Spacer()
                 if let reset, resetLeading {
-                    Text("reset in \(relativeReset(reset))")
+                    Text(resetIn(reset))
                         .font(.caption2)
                         .foregroundStyle(isResetUrgent(reset) ? .orange : .secondary)
                 }

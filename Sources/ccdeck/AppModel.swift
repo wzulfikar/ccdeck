@@ -14,6 +14,13 @@ final class AppModel {
     private(set) var accounts: [Account] = []
     private(set) var usageByEmail: [String: Usage] = [:]
     private(set) var errorByEmail: [String: String] = [:]
+    // Tokens consumed since local midnight, summed across all Claude Code sessions
+    // (not per-account — see TokenUsageScanner). Scanned lazily when the popover opens,
+    // stale-while-revalidate: the last value is persisted and shown immediately while a
+    // fresh scan runs in the background.
+    private(set) var tokensToday: TokenUsageToday?
+    private(set) var isScanningTokens = false
+    private var lastTokenScan: Date?
     private(set) var activeEmail: String?
     private(set) var lastRefresh: Date?
     var statusMessage: String = ""
@@ -94,6 +101,13 @@ final class AppModel {
         self.accounts = store.listAccounts()
         self.activeEmail = store.getSetting("activeEmail")
         self.shouldStayAwake = store.getSetting("stayAwake") == "1"  // default off
+        // Restore the last token total — but only if it's from today; a value stamped
+        // on an earlier day would show yesterday's number until the rescan lands.
+        if let json = store.getSetting("tokensToday")?.data(using: .utf8),
+           let cached = try? JSONDecoder().decode(TokenUsageToday.self, from: json),
+           cached.day == Calendar.current.startOfDay(for: Date()) {
+            self.tokensToday = cached
+        }
         detectActiveFromKeychain()
     }
 
@@ -324,6 +338,24 @@ final class AppModel {
         }
         lastRefresh = Date()
         autoSwitchIfNeeded()
+    }
+
+    /// Re-scan Claude Code transcripts for today's token total, stale-while-revalidate:
+    /// the existing `tokensToday` stays on screen while this runs, then swaps to the fresh
+    /// value. Triggered when the popover opens — not on the 30s poll — so idle sessions do
+    /// no disk work. Incremental + off the main actor, so a scan is cheap.
+    func refreshTokenUsage() async {
+        // Throttle: at most one scan per poll interval. Reopening the popover moments
+        // after a scan just reuses the value already on screen.
+        if let last = lastTokenScan, Date().timeIntervalSince(last) < pollInterval { return }
+        lastTokenScan = Date()
+        isScanningTokens = true
+        defer { isScanningTokens = false }
+        let fresh = await TokenUsageScanner.shared.scanToday()
+        tokensToday = fresh
+        if let json = try? JSONEncoder().encode(fresh), let s = String(data: json, encoding: .utf8) {
+            store.setSetting("tokensToday", s)
+        }
     }
 
     /// Manual single-account retry — backs the tappable error label so a transient

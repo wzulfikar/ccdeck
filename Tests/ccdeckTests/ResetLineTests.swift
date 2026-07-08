@@ -33,4 +33,14 @@ struct ResetLineTests {
         let line = resetLine(next: (at(hours: 2), "Sam"), weekly: (at(hours: 3), "Wildan"))
         #expect(line == "Next reset in 2 hrs (Sam). Weekly reset in 3 hrs (Wildan).")
     }
+
+    @Test("Under a minute out → 'soon', no 'in' / no 'now' / no '1 min'")
+    func soonCollapses() {
+        let now = Date()
+        #expect(relativeReset(now.addingTimeInterval(30), now: now) == "soon")
+        #expect(relativeReset(now.addingTimeInterval(-5), now: now) == "soon")
+        #expect(resetIn(now.addingTimeInterval(30), now: now) == "reset soon")
+        let line = resetLine(next: (now.addingTimeInterval(30), "Wildan"), weekly: nil)
+        #expect(line == "Next reset soon (Wildan)")
+    }
 }
