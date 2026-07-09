@@ -485,11 +485,10 @@ struct MenuView: View {
     @ViewBuilder
     private var usageSection: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Title + empty area cycle the period; the number toggles insights (its own
+            // gesture wins over the row's).
             HStack {
-                // Title (label) cycles the period.
                 Text(model.usageTitle).font(.caption.bold())
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.cycleUsageWindow() }
                     .help("Click to cycle: today → 7-day → 30-day")
                 Spacer()
                 // Summary numbers toggle the activity-insights panel for this period.
@@ -506,6 +505,8 @@ struct MenuView: View {
                 .onTapGesture { model.toggleInsights() }
                 .help(model.insightsShown ? "Click to show the chart" : "Click for activity insights")
             }
+            .contentShape(Rectangle())
+            .onTapGesture { model.cycleUsageWindow() }
 
             // The insights panel replaces the chart while toggled on; its counts follow the
             // selected period (recomputed on toggle / period change).
