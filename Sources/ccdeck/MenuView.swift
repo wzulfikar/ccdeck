@@ -478,33 +478,95 @@ struct MenuView: View {
 
     // MARK: - Tokens usage (chart + delta)
 
-    // Tapping anywhere in this block — header, summary, or chart — cycles the window
-    // (today → 7-day → 30-day). The summary line and chart re-derive from the selection.
+    // Tokens block. The title (and empty chart area) cycles the period today → 7-day →
+    // 30-day, clearing any drill-in; the summary numbers toggle an activity-insights panel
+    // in place of the chart; and tapping a day's bar in the 7/30-day chart drills into that
+    // day's hourly breakdown ("Tokens 6 Jul"). Everything re-derives from the selection.
     @ViewBuilder
     private var usageSection: some View {
-        let w = model.usageWindow
         VStack(alignment: .leading, spacing: 4) {
+            // Title + empty area cycle the period; the number toggles insights (its own
+            // gesture wins over the row's).
             HStack {
-                Text(w.title).font(.caption.bold())
+                Text(model.usageTitle).font(.caption.bold())
+                    .help("Click to cycle: today → 7-day → 30-day")
                 Spacer()
-                if let s = model.usageSummary {
-                    Text(usageSummaryText(s)).font(.caption.monospacedDigit().bold())
-                } else if model.tokensToday != nil {
-                    Text(formatTokens(model.tokensToday!.total)).font(.caption.monospacedDigit().bold())
-                } else {
-                    Text("scanning…").font(.caption).foregroundStyle(.secondary)
+                // Summary numbers toggle the activity-insights panel for this period.
+                Group {
+                    if let s = model.usageSummary {
+                        Text(usageSummaryText(s)).font(.caption.monospacedDigit().bold())
+                    } else if model.tokensToday != nil {
+                        Text(formatTokens(model.tokensToday!.total)).font(.caption.monospacedDigit().bold())
+                    } else {
+                        Text("scanning…").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { model.toggleInsights() }
+                .help(model.insightsShown ? "Click to show the chart" : "Click for activity insights")
             }
+            .contentShape(Rectangle())
+            .onTapGesture { model.cycleUsageWindow() }
 
-            UsageChart(bars: model.usageBars, unit: w.barUnit, domain: model.usageDomain)
-                .frame(height: 90)
-                // Gap so the chart reads as its own block, not glued to the header row.
-                .padding(.top, 14)
+            // The insights panel replaces the chart while toggled on; its counts follow the
+            // selected period (recomputed on toggle / period change).
+            if model.showingInsights, let ins = model.periodInsights {
+                insightsBlock(ins)
+                    .padding(.top, 14)
+                    // Tapping the panel dismisses it, back to the chart.
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.toggleInsights() }
+            } else {
+                UsageChart(bars: model.usageBars, unit: model.usageBarUnit, domain: model.usageDomain, onTap: usageChartTapped)
+                    .frame(height: 90)
+                    // Gap so the chart reads as its own block, not glued to the header row.
+                    .padding(.top, 14)
+            }
         }
-        // Whole block is one tap target; hovering a bar still shows its per-model tooltip.
-        .contentShape(Rectangle())
-        .onTapGesture { model.cycleUsageWindow() }
-        .help("Click to cycle: today → 7-day → 30-day")
+    }
+
+    /// Today's activity panel: headline counts, then top tools / skills / MCP tools.
+    @ViewBuilder
+    private func insightsBlock(_ ins: TodayInsights) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            (Text("\(ins.prompts) prompts, \(ins.toolCalls) tool calls, \(ins.sessions) sessions")
+                + (ins.rateLimited > 0
+                    ? Text(", ") + Text("\(ins.rateLimited) rate-limited").foregroundColor(.orange)
+                    : Text("")))
+                .font(.caption).foregroundStyle(.primary)
+
+            insightLeaders("Top tools", TodayInsights.top(ins.builtInToolCounts))
+            insightLeaders("Skills", TodayInsights.top(ins.skillCounts))
+            insightLeaders("MCP", TodayInsights.top(ins.mcpCounts))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One "label: name Nx · name Nx" line, or nothing when the map is empty.
+    @ViewBuilder
+    private func insightLeaders(_ label: String, _ items: [(name: String, count: Int)]) -> some View {
+        if !items.isEmpty {
+            Text("\(label): " + items.map { "\(shortToolName($0.name)) \($0.count)x" }.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    /// "mcp__github__get_me" → "get_me"; other names pass through unchanged.
+    private func shortToolName(_ raw: String) -> String {
+        guard raw.hasPrefix("mcp__") else { return raw }
+        return raw.components(separatedBy: "__").last ?? raw
+    }
+
+    /// A tap inside the chart, carrying the bucket under the cursor (nil off-plot). Tapping a
+    /// day's bar in the 7/30-day view drills into that day; today's bar and empty area do
+    /// nothing — cycling stays on the title row.
+    private func usageChartTapped(_ bucket: Date?) {
+        guard model.usageBarUnit == .day, let d = bucket,
+              !Calendar.current.isDateInToday(d),
+              model.usageBars.contains(where: { $0.date == d && $0.tokens > 0 })
+        else { return }
+        model.selectUsageDay(d)
     }
 
     /// "135M / $116 / +30%" — cost omitted until prices load, delta until a baseline exists.
@@ -623,6 +685,8 @@ private struct UsageChart: View {
     let bars: [UsageBar]
     let unit: Calendar.Component
     let domain: ClosedRange<Date>?
+    // Called on a plot tap with the bucket under the cursor (nil off-plot / empty).
+    var onTap: (Date?) -> Void = { _ in }
     // Bucket-start (local hour/day) the cursor is over, for the hover tooltip.
     @State private var hovered: Date?
     // Distinct buckets, to size the daily-tick stride without counting stacked segments.
@@ -691,6 +755,8 @@ private struct UsageChart: View {
                         else { hovered = nil; return }
                         hovered = bucketStart(date)
                     }
+                    // Tap resolves to the hovered bucket (the cursor sits over it on click).
+                    .onTapGesture { onTap(hovered) }
             }
         }
     }

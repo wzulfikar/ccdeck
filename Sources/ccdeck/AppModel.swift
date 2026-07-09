@@ -19,6 +19,14 @@ final class AppModel {
     // stale-while-revalidate: the last value is persisted and shown immediately while a
     // fresh scan runs in the background.
     private(set) var tokensToday: TokenUsageToday?
+    // Activity insights (prompts, tool calls, rate-limits, top tools/skills/MCP) for the
+    // selected period, shown in place of the chart. Toggled by tapping the summary numbers;
+    // recomputed (a transcript walk) whenever it's shown and the period changes. Not
+    // persisted, so a cold open starts on the chart.
+    var insightsShown = false
+    private(set) var periodInsights: TodayInsights?
+    /// True while the insights panel should be on screen (toggled on and its data has landed).
+    var showingInsights: Bool { insightsShown && periodInsights != nil }
     private(set) var isScanningTokens = false
     private var lastTokenScan: Date?
     // Which span the tokens row + chart show. Cycles today → 7-day → 30-day on click.
@@ -29,6 +37,15 @@ final class AppModel {
             recomputeUsage()
         }
     }
+    // When set, the chart drills into this single day's hourly bars, overriding the
+    // multi-day window. Set by tapping a day's bar in the 7/30-day chart; cleared by
+    // cycling the window or an empty-area tap. Not persisted — drill-in is transient.
+    private(set) var selectedDay: Date?
+    /// Header label for the tokens block: the drilled day, else the window's own title.
+    /// Unchanged by the insights toggle — the title always names the period.
+    var usageTitle: String { selectedDay.map { Self.dayTitle($0) } ?? usageWindow.title }
+    /// Chart x-axis granularity: hourly while drilled into a day, else the window's unit.
+    var usageBarUnit: Calendar.Component { selectedDay != nil ? .hour : usageWindow.barUnit }
     // Derived from the hourly_usage history for `usageWindow`, recomputed after each scan
     // and on window change. `usageBars` drives the chart; `usageSummary` the tokens/cost/
     // delta line. Both nil until history has been read at least once.
@@ -177,10 +194,15 @@ final class AppModel {
         // whatever's stored. Backfill is a full-tree walk so it runs off the main actor and
         // only the first launch after this feature ships pays for it.
         Task { @MainActor in
-            if store.getSetting("historyBackfilled") != "1" {
-                let rows = await TokenUsageScanner.shared.backfillHistory()
-                store.insertHours(rows)
+            // Seed tokens + insights together. Gated on the insight flag so an existing
+            // install (tokens already backfilled) still walks once to seed insight history;
+            // the token re-insert is an idempotent upsert.
+            if store.getSetting("insightsBackfilled") != "1" {
+                let bf = await TokenUsageScanner.shared.backfillHistory()
+                store.insertHours(bf.hourly)
+                store.insertInsights(bf.insights)
                 store.setSetting("historyBackfilled", "1")
+                store.setSetting("insightsBackfilled", "1")
             }
             recomputeUsage()
         }
@@ -409,9 +431,36 @@ final class AppModel {
         let rows = scan.hourly.flatMap { hour, models in
             models.map { HourlyRow(hourEpoch: hour, model: $0.key, tokens: $0.value) }
         }
+        let pruneEpoch = Int(Date().addingTimeInterval(-61 * 86_400).timeIntervalSince1970)
         store.replaceHours(fromEpoch: fromEpoch, rows: rows)
-        store.pruneHours(beforeEpoch: Int(Date().addingTimeInterval(-61 * 86_400).timeIntervalSince1970))
+        store.replaceInsights(fromEpoch: fromEpoch, rows: scan.insights)
+        store.pruneHours(beforeEpoch: pruneEpoch)
+        store.pruneInsights(beforeEpoch: pruneEpoch)
         recomputeUsage()
+        if insightsShown { recomputeInsights() }
+    }
+
+    /// Toggle the activity-insights panel (tapping the summary numbers). Turning it on
+    /// aggregates the stored hourly history for the current period; off drops the data.
+    func toggleInsights() {
+        insightsShown.toggle()
+        if insightsShown { recomputeInsights() }
+        else { periodInsights = nil }
+    }
+
+    /// Aggregate the persisted insight history for the selected period into `periodInsights`.
+    /// Reads the store (no transcript walk), so it survives the transcripts being cleared.
+    func recomputeInsights(now: Date = Date()) {
+        let cal = Calendar.current
+        let start: Date, end: Date
+        if let day = selectedDay {
+            start = cal.startOfDay(for: day)
+            end = min(cal.date(byAdding: .day, value: 1, to: start) ?? now, now)
+        } else {
+            start = usageWindow.range(now: now, cal: cal).start
+            end = now
+        }
+        periodInsights = store.insights(fromEpoch: epoch(start), toEpoch: epoch(end))
     }
 
     // MARK: - Usage history (chart + delta)
@@ -421,30 +470,55 @@ final class AppModel {
     /// percent delta against the equal-length window immediately before it.
     private func recomputeUsage(now: Date = Date()) {
         let cal = Calendar.current
-        let (start, end) = usageWindow.range(now: now, cal: cal)
-        let unit = usageWindow.barUnit
+        // Effective span: a drilled single day (hourly) overrides the multi-day window.
+        let start: Date, unit: Calendar.Component, shift: Int, lastDay: Date
+        if let day = selectedDay {
+            start = cal.startOfDay(for: day)
+            unit = .hour
+            shift = 1                       // baseline = the day before
+            lastDay = start
+        } else {
+            start = usageWindow.range(now: now, cal: cal).start
+            unit = usageWindow.barUnit
+            shift = usageWindow.shiftDays
+            lastDay = cal.startOfDay(for: now)
+        }
+        // The axis spans through the end of the last covered day (start of the day after) so
+        // the trailing bar sits fully in-plot. Token sums stop at `now`, so a still-running
+        // day (today, or today drilled in) compares fairly against the equally partial
+        // baseline below; a fully-elapsed past day sums the whole day.
+        let dayAfterLast = cal.date(byAdding: .day, value: 1, to: lastDay) ?? now
+        let queryEnd = min(dayAfterLast, now)
 
-        let curRows = store.hourlyRows(fromEpoch: epoch(start), toEpoch: epoch(end) + 1)
-        usageBars = bars(curRows, from: start, to: end, unit: unit, cal: cal)
-        // End the domain at the start of tomorrow so the final bar (a full hour/day wide)
-        // sits entirely inside the plot instead of overflowing past "now". For today this
-        // also yields the full 24h axis (00/06/12/18).
-        let domainEnd = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: end)) ?? end
-        usageDomain = bucketStart(start, unit: unit, cal: cal)...domainEnd
+        // hourlyRows is half-open [from, to); querying to epoch(queryEnd) excludes the next
+        // bucket exactly (e.g. tomorrow's 00:00 hour for a drilled past day).
+        let curRows = store.hourlyRows(fromEpoch: epoch(start), toEpoch: epoch(queryEnd))
+        usageBars = bars(curRows, from: start, to: queryEnd, unit: unit, cal: cal)
+        usageDomain = bucketStart(start, unit: unit, cal: cal)...dayAfterLast
 
         let curTokens = curRows.reduce(0) { $0 + $1.tokens.total }
         let curCost = cost(curRows)
 
         // Previous equal-length window, shifted back by the window's span.
-        let shift = usageWindow.shiftDays
         let pStart = cal.date(byAdding: .day, value: -shift, to: start) ?? start
-        let pEnd = cal.date(byAdding: .day, value: -shift, to: end) ?? end
-        let prevRows = store.hourlyRows(fromEpoch: epoch(pStart), toEpoch: epoch(pEnd) + 1)
+        let pEnd = cal.date(byAdding: .day, value: -shift, to: queryEnd) ?? queryEnd
+        let prevRows = store.hourlyRows(fromEpoch: epoch(pStart), toEpoch: epoch(pEnd))
         let prevTokens = prevRows.reduce(0) { $0 + $1.tokens.total }
         let baselineCovered = (store.earliestHourEpoch() ?? .max) <= epoch(pStart)
         let delta = Self.deltaPct(cur: curTokens, prev: prevTokens, baselineCovered: baselineCovered)
 
         usageSummary = UsageSummary(tokens: curTokens, cost: curCost, deltaPct: delta)
+    }
+
+    /// "Tokens today" / "Tokens yesterday" / "Tokens 6 Jul" for a drilled day.
+    static func dayTitle(_ day: Date, now: Date = Date()) -> String {
+        let cal = Calendar.current
+        if cal.isDate(day, inSameDayAs: now) { return "Tokens today" }
+        if let yst = cal.date(byAdding: .day, value: -1, to: now),
+           cal.isDate(day, inSameDayAs: yst) { return "Tokens yesterday" }
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM")
+        return "Tokens \(f.string(from: day))"
     }
 
     /// Fractional change of the current window vs. the previous equal-length one, or nil to
@@ -457,7 +531,24 @@ final class AppModel {
         return Double(cur - prev) / Double(prev)
     }
 
-    func cycleUsageWindow() { usageWindow = usageWindow.next }
+    /// Drill the chart into one day's hourly breakdown (from tapping its bar in the 7/30-day
+    /// view). An empty-area tap or a window cycle clears it.
+    func selectUsageDay(_ day: Date) {
+        selectedDay = Calendar.current.startOfDay(for: day)
+        recomputeUsage()
+        if insightsShown { recomputeInsights() }
+    }
+
+    /// Empty-area / header tap. Clears a drill-in first; otherwise advances the window.
+    func cycleUsageWindow() {
+        if selectedDay != nil {
+            selectedDay = nil
+            recomputeUsage()
+        } else {
+            usageWindow = usageWindow.next   // didSet recomputes
+        }
+        if insightsShown { recomputeInsights() }
+    }
 
     private func epoch(_ d: Date) -> Int { Int(d.timeIntervalSince1970) }
 

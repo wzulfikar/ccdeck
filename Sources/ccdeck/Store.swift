@@ -54,6 +54,13 @@ final class Store {
             messages     INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (hour_epoch, model)
         );
+        CREATE TABLE IF NOT EXISTS hourly_insight (
+            hour_epoch INTEGER NOT NULL,      -- unix ts floored to the hour (UTC)
+            kind       TEXT    NOT NULL,      -- prompt|toolCall|rateLimited|tool|skill|session
+            name       TEXT    NOT NULL DEFAULT '',  -- tool/skill/session label; '' for scalars
+            count      INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (hour_epoch, kind, name)
+        );
         """)
     }
 
@@ -147,6 +154,77 @@ final class Store {
                 )
             ))
         }
+        return out
+    }
+
+    // MARK: - Hourly insight history
+
+    /// Overwrite every insight row at or after `fromEpoch` with `rows` — same replace-today
+    /// semantics as `replaceHours`, so a restart re-scanning today can't double-count.
+    func replaceInsights(fromEpoch: Int, rows: [InsightRow]) {
+        exec("BEGIN;")
+        run("DELETE FROM hourly_insight WHERE hour_epoch >= ?;", int: fromEpoch)
+        insertInsightRows(rows)
+        exec("COMMIT;")
+    }
+
+    /// Seed insight rows for hours that may not exist yet (history backfill). Re-runnable.
+    func insertInsights(_ rows: [InsightRow]) {
+        exec("BEGIN;")
+        insertInsightRows(rows)
+        exec("COMMIT;")
+    }
+
+    private func insertInsightRows(_ rows: [InsightRow]) {
+        let sql = """
+        INSERT INTO hourly_insight(hour_epoch,kind,name,count) VALUES(?,?,?,?)
+        ON CONFLICT(hour_epoch,kind,name) DO UPDATE SET count=excluded.count;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        for r in rows {
+            sqlite3_bind_int64(stmt, 1, Int64(r.hourEpoch))
+            sqlite3_bind_text(stmt, 2, r.kind, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, r.name, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int64(stmt, 4, Int64(r.count))
+            sqlite3_step(stmt)
+            sqlite3_reset(stmt)
+        }
+    }
+
+    func pruneInsights(beforeEpoch: Int) {
+        run("DELETE FROM hourly_insight WHERE hour_epoch < ?;", int: beforeEpoch)
+    }
+
+    /// Aggregate the persisted hourly activity over `[fromEpoch, toEpoch)` into one summary:
+    /// scalar kinds sum, `tool`/`skill` group by name, `session` counts distinct names.
+    func insights(fromEpoch: Int, toEpoch: Int) -> TodayInsights {
+        var out = TodayInsights()
+        var sessions: Set<String> = []
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT kind,name,count FROM hourly_insight
+        WHERE hour_epoch >= ? AND hour_epoch < ?;
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(fromEpoch))
+        sqlite3_bind_int64(stmt, 2, Int64(toEpoch))
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let kind = text(stmt, 0), name = text(stmt, 1)
+            let count = Int(sqlite3_column_int64(stmt, 2))
+            switch kind {
+            case "prompt":      out.prompts += count
+            case "toolCall":    out.toolCalls += count
+            case "rateLimited": out.rateLimited += count
+            case "tool":        out.toolCounts[name, default: 0] += count
+            case "skill":       out.skillCounts[name, default: 0] += count
+            case "session":     sessions.insert(name)
+            default:            break
+            }
+        }
+        out.sessions = sessions.count
         return out
     }
 
