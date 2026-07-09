@@ -106,12 +106,74 @@ struct UsageSummary: Sendable, Equatable {
     var deltaPct: Double?  // vs previous equal-length window; nil when no baseline
 }
 
-/// Result of a scan: today's running aggregate (for the existing "Tokens today" row) plus
-/// the same data bucketed by hour+model, which the caller upserts into the history store.
+/// Activity counts for a period, aggregated from the persisted hourly insight history (see
+/// `InsightRow`). Built by `Store.insights(fromEpoch:toEpoch:)` for whatever span the panel
+/// is showing, so it survives the transcripts being cleared.
+struct TodayInsights: Sendable, Equatable, Codable {
+    /// User-typed prompts (excludes tool-result turns, meta lines, and subagent sidechains).
+    var prompts = 0
+    /// Total tool invocations across all sessions.
+    var toolCalls = 0
+    /// Assistant lines flagged `isApiErrorMessage` whose text is a usage/rate-limit notice.
+    var rateLimited = 0
+    /// Distinct sessions active in the period.
+    var sessions = 0
+    /// Raw `tool_use` name → count. Built-in tools, `Skill`, and `mcp__server__tool` names
+    /// all land here; the UI splits them into built-in / skill / MCP leaderboards.
+    var toolCounts: [String: Int] = [:]
+    /// Skill slug (from a `Skill` tool_use's `input.skill`) → count.
+    var skillCounts: [String: Int] = [:]
+
+    /// Built-in tools only (excludes `mcp__…` tools and the `Skill` dispatcher, which get
+    /// their own leaderboards).
+    var builtInToolCounts: [String: Int] {
+        toolCounts.filter { !$0.key.hasPrefix("mcp__") && $0.key != "Skill" }
+    }
+    /// `mcp__server__tool` calls only.
+    var mcpCounts: [String: Int] { toolCounts.filter { $0.key.hasPrefix("mcp__") } }
+
+    /// Top `n` entries of a count map, highest first, ties broken by name for stability.
+    static func top(_ counts: [String: Int], _ n: Int = 3) -> [(name: String, count: Int)] {
+        counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .prefix(n).map { (name: $0.key, count: $0.value) }
+    }
+}
+
+/// One persisted activity count for a single hour, in a uniform shape so one table holds
+/// everything: `kind` names the metric, `name` labels the tool/skill/session ("" for the
+/// scalar kinds), and `count` is that hour's tally. Aggregating a period sums the scalar
+/// kinds, groups the `tool`/`skill` kinds by name, and counts distinct `session` names.
+struct InsightRow: Sendable, Equatable {
+    var hourEpoch: Int
+    var kind: String   // "prompt" | "toolCall" | "rateLimited" | "tool" | "skill" | "session"
+    var name: String
+    var count: Int
+}
+
+/// Result of a scan: today's running aggregate (for the existing "Tokens today" row), the
+/// same data bucketed by hour+model (upserted into the history store), and today's hourly
+/// insight rows (which replace today's rows in the insight history).
 struct TokenScan: Sendable {
     var today: TokenUsageToday
     /// hourEpoch → model → tokens, covering only today's hours (the only ones a scan sees).
     var hourly: [Int: [String: ModelTokens]]
+    var insights: [InsightRow]
+}
+
+/// One-shot history seed from the whole transcript tree: token rows + insight rows.
+struct HistoryBackfill: Sendable {
+    var hourly: [HourlyRow]
+    var insights: [InsightRow]
+}
+
+/// One hour's activity, accumulated during a scan before being flattened into `InsightRow`s.
+private struct InsightBucket {
+    var prompts = 0
+    var toolCalls = 0
+    var rateLimited = 0
+    var toolCounts: [String: Int] = [:]
+    var skillCounts: [String: Int] = [:]
+    var sessions: Set<String> = []
 }
 
 /// Sums today's token usage from `~/.claude/projects/**/*.jsonl` — Claude Code's
@@ -134,12 +196,17 @@ actor TokenUsageScanner {
     // this process. Reset at midnight alongside `totals`. The caller mirrors this into the
     // `hourly_usage` history table (replacing today's rows each scan) so it survives restart.
     private var hourly: [Int: [String: ModelTokens]] = [:]
+    // Today's activity bucketed by hour-epoch, rebuilt cumulatively this process alongside
+    // `hourly` and reset at midnight. The caller flattens it to `InsightRow`s and replaces
+    // today's rows in the `hourly_insight` history so the panel can query any period.
+    private var hourlyInsights: [Int: InsightBucket] = [:]
 
     func scanToday(now: Date = Date()) -> TokenScan {
         let start = Calendar.current.startOfDay(for: now)
         if dayStart != start {                    // new day (or first run) → drop yesterday's cache
             dayStart = start
             offsets = [:]; seen = []; totals = TokenUsageToday(day: start); hourly = [:]
+            hourlyInsights = [:]
         }
 
         let fm = FileManager.default
@@ -149,7 +216,7 @@ actor TokenUsageScanner {
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
-        ) else { return TokenScan(today: totals, hourly: hourly) }
+        ) else { return TokenScan(today: totals, hourly: hourly, insights: Self.rows(from: hourlyInsights)) }
 
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -180,31 +247,111 @@ actor TokenUsageScanner {
             offsets[path] = offset + UInt64(complete.count)
 
             for line in complete.split(separator: 0x0A, omittingEmptySubsequences: true) {
-                guard let e = parseAssistant(line, iso: iso, isoNoFrac: isoNoFrac),
-                      e.ts >= start,
-                      seen.insert(e.id).inserted
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                      let tsString = obj["timestamp"] as? String,
+                      let ts = iso.date(from: tsString) ?? isoNoFrac.date(from: tsString),
+                      ts >= start
                 else { continue }
-
-                totals.input += e.tok.input
-                totals.output += e.tok.output
-                totals.cacheCreate += e.tok.cacheCreate
-                totals.cacheRead += e.tok.cacheRead
-                totals.messages += 1
-                accumulate(&totals.byModel, model: e.model, tok: e.tok)
-                // Hour bucket (UTC hour floor). Local grouping for daily views happens at read.
-                let hour = Int(e.ts.timeIntervalSince1970) / 3600 * 3600
-                var bucket = hourly[hour] ?? [:]
-                accumulateModel(&bucket, model: e.model, tok: e.tok)
-                hourly[hour] = bucket
+                // Dedup the whole line by uuid (resumed sessions replay old lines verbatim).
+                let uid = (obj["uuid"] as? String) ?? (obj["requestId"] as? String) ?? tsString
+                guard seen.insert(uid).inserted else { continue }
+                let hour = Int(ts.timeIntervalSince1970) / 3600 * 3600
+                if obj["type"] as? String == "assistant" { ingestTokens(obj, ts: ts) }
+                Self.tally(obj, into: &hourlyInsights[hour, default: InsightBucket()])
             }
         }
-        return TokenScan(today: totals, hourly: hourly)
+        return TokenScan(today: totals, hourly: hourly, insights: Self.rows(from: hourlyInsights))
+    }
+
+    /// Flatten hourly activity buckets into the uniform `InsightRow` shape for storage.
+    private static func rows(from buckets: [Int: InsightBucket]) -> [InsightRow] {
+        var out: [InsightRow] = []
+        for (hour, b) in buckets {
+            if b.prompts > 0 { out.append(InsightRow(hourEpoch: hour, kind: "prompt", name: "", count: b.prompts)) }
+            if b.toolCalls > 0 { out.append(InsightRow(hourEpoch: hour, kind: "toolCall", name: "", count: b.toolCalls)) }
+            if b.rateLimited > 0 { out.append(InsightRow(hourEpoch: hour, kind: "rateLimited", name: "", count: b.rateLimited)) }
+            for (n, c) in b.toolCounts { out.append(InsightRow(hourEpoch: hour, kind: "tool", name: n, count: c)) }
+            for (n, c) in b.skillCounts { out.append(InsightRow(hourEpoch: hour, kind: "skill", name: n, count: c)) }
+            for s in b.sessions { out.append(InsightRow(hourEpoch: hour, kind: "session", name: s, count: 1)) }
+        }
+        return out
+    }
+
+    /// Fold one line's activity into an hour bucket (prompts / tool calls / rate-limits /
+    /// leaderboards / the session that produced it).
+    private static func tally(_ obj: [String: Any], into b: inout InsightBucket) {
+        if let sid = obj["sessionId"] as? String { b.sessions.insert(sid) }
+        switch obj["type"] as? String {
+        case "assistant":
+            let msg = obj["message"] as? [String: Any]
+            // Usage/rate-limit notices are assistant lines flagged as API errors.
+            if obj["isApiErrorMessage"] as? Bool == true {
+                if let text = msg?["content"] as? String, isLimitNotice(text) { b.rateLimited += 1 }
+                return
+            }
+            // Tool calls: count every tool_use block; record Skill invocations by slug.
+            if let content = msg?["content"] as? [[String: Any]] {
+                for blk in content where blk["type"] as? String == "tool_use" {
+                    guard let name = blk["name"] as? String else { continue }
+                    b.toolCalls += 1
+                    b.toolCounts[name, default: 0] += 1
+                    if name == "Skill", let slug = (blk["input"] as? [String: Any])?["skill"] as? String {
+                        b.skillCounts[slug, default: 0] += 1
+                    }
+                }
+            }
+        case "user":
+            // Count only user-typed prompts: skip system-injected meta lines, subagent
+            // sidechains, and tool-result carrier turns (no text block).
+            if obj["isMeta"] as? Bool == true || obj["isSidechain"] as? Bool == true { return }
+            let content = (obj["message"] as? [String: Any])?["content"]
+            let isPrompt = content is String
+                || (content as? [[String: Any]])?.contains { $0["type"] as? String == "text" } == true
+            if isPrompt { b.prompts += 1 }
+        default:
+            break
+        }
+    }
+
+    /// Fold one assistant line into the token totals and hour buckets.
+    private func ingestTokens(_ obj: [String: Any], ts: Date) {
+        let msg = obj["message"] as? [String: Any]
+        // Token usage (only present on model-response lines).
+        guard let u = msg?["usage"] as? [String: Any] else { return }
+        let model = (msg?["model"] as? String) ?? "unknown"
+        let tok = ModelTokens(
+            input: (u["input_tokens"] as? Int) ?? 0,
+            output: (u["output_tokens"] as? Int) ?? 0,
+            cacheCreate: (u["cache_creation_input_tokens"] as? Int) ?? 0,
+            cacheRead: (u["cache_read_input_tokens"] as? Int) ?? 0,
+            messages: 1
+        )
+        totals.input += tok.input
+        totals.output += tok.output
+        totals.cacheCreate += tok.cacheCreate
+        totals.cacheRead += tok.cacheRead
+        totals.messages += 1
+        accumulate(&totals.byModel, model: model, tok: tok)
+        // Hour bucket (UTC hour floor). Local grouping for daily views happens at read.
+        let hour = Int(ts.timeIntervalSince1970) / 3600 * 3600
+        var bucket = hourly[hour] ?? [:]
+        accumulateModel(&bucket, model: model, tok: tok)
+        hourly[hour] = bucket
+    }
+
+    /// True for the assistant-side usage/rate-limit notices Claude Code writes on 429s,
+    /// e.g. "You've hit your session limit · resets 3:30pm". Excludes unrelated API errors
+    /// (e.g. "Not logged in") so the count reflects rate limiting specifically.
+    static func isLimitNotice(_ text: String) -> Bool {
+        let s = text.lowercased()
+        return s.contains("limit") || s.contains("429") || s.contains("overloaded")
     }
 
     /// One-shot full walk of every transcript, bucketing the last `days` of usage into
-    /// (hour, model) rows. Used once to seed the history table from files that predate the
-    /// app; unlike `scanToday` it keeps no state and reads every file whole.
-    func backfillHistory(days: Int = 60, now: Date = Date()) -> [HourlyRow] {
+    /// (hour, model) token rows and (hour, kind, name) insight rows. Used once to seed the
+    /// history tables from files that predate the app; unlike `scanToday` it keeps no state
+    /// and reads every file whole.
+    func backfillHistory(days: Int = 60, now: Date = Date()) -> HistoryBackfill {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         let fm = FileManager.default
         let root = fm.homeDirectoryForCurrentUser
@@ -213,7 +360,7 @@ actor TokenUsageScanner {
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
+        ) else { return HistoryBackfill(hourly: [], insights: []) }
 
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -221,6 +368,7 @@ actor TokenUsageScanner {
         isoNoFrac.formatOptions = [.withInternetDateTime]
 
         var buckets: [Int: [String: ModelTokens]] = [:]
+        var insightBuckets: [Int: InsightBucket] = [:]
         var seenAll: Set<String> = []
         for case let url as URL in walker {
             guard url.pathExtension == "jsonl" else { continue }
@@ -228,48 +376,40 @@ actor TokenUsageScanner {
             if let mod = rv?.contentModificationDate, mod < cutoff { continue }
             guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
             for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
-                guard let e = parseAssistant(line, iso: iso, isoNoFrac: isoNoFrac),
-                      e.ts >= cutoff,
-                      seenAll.insert(e.id).inserted
+                // Parse once for both token and activity accumulation (all line types).
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                      let tsString = obj["timestamp"] as? String,
+                      let ts = iso.date(from: tsString) ?? isoNoFrac.date(from: tsString),
+                      ts >= cutoff
                 else { continue }
-                let hour = Int(e.ts.timeIntervalSince1970) / 3600 * 3600
-                var bucket = buckets[hour] ?? [:]
-                accumulateModel(&bucket, model: e.model, tok: e.tok)
-                buckets[hour] = bucket
+                let uid = (obj["uuid"] as? String) ?? (obj["requestId"] as? String) ?? tsString
+                guard seenAll.insert(uid).inserted else { continue }
+                let hour = Int(ts.timeIntervalSince1970) / 3600 * 3600
+                if obj["type"] as? String == "assistant",
+                   let msg = obj["message"] as? [String: Any],
+                   let u = msg["usage"] as? [String: Any] {
+                    let model = (msg["model"] as? String) ?? "unknown"
+                    let tok = ModelTokens(
+                        input: (u["input_tokens"] as? Int) ?? 0,
+                        output: (u["output_tokens"] as? Int) ?? 0,
+                        cacheCreate: (u["cache_creation_input_tokens"] as? Int) ?? 0,
+                        cacheRead: (u["cache_read_input_tokens"] as? Int) ?? 0,
+                        messages: 1
+                    )
+                    var bucket = buckets[hour] ?? [:]
+                    accumulateModel(&bucket, model: model, tok: tok)
+                    buckets[hour] = bucket
+                }
+                Self.tally(obj, into: &insightBuckets[hour, default: InsightBucket()])
             }
         }
-        return buckets.flatMap { hour, models in
+        let hourly = buckets.flatMap { hour, models in
             models.map { HourlyRow(hourEpoch: hour, model: $0.key, tokens: $0.value) }
         }
+        return HistoryBackfill(hourly: hourly, insights: Self.rows(from: insightBuckets))
     }
 
     // MARK: - Parsing helpers
-
-    private struct Entry { var ts: Date; var id: String; var model: String; var tok: ModelTokens }
-
-    /// Parses one JSONL line into an assistant-usage entry, or nil if it isn't one.
-    private func parseAssistant(
-        _ line: Data.SubSequence, iso: ISO8601DateFormatter, isoNoFrac: ISO8601DateFormatter
-    ) -> Entry? {
-        guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-              obj["type"] as? String == "assistant",
-              let tsString = obj["timestamp"] as? String,
-              let ts = iso.date(from: tsString) ?? isoNoFrac.date(from: tsString),
-              let msg = obj["message"] as? [String: Any],
-              let u = msg["usage"] as? [String: Any]
-        else { return nil }
-        let id = (obj["requestId"] as? String) ?? (obj["uuid"] as? String) ?? tsString
-        // Fall back to a stable "unknown" bucket if the line has no model (priced as $0).
-        let model = (msg["model"] as? String) ?? "unknown"
-        let tok = ModelTokens(
-            input: (u["input_tokens"] as? Int) ?? 0,
-            output: (u["output_tokens"] as? Int) ?? 0,
-            cacheCreate: (u["cache_creation_input_tokens"] as? Int) ?? 0,
-            cacheRead: (u["cache_read_input_tokens"] as? Int) ?? 0,
-            messages: 1
-        )
-        return Entry(ts: ts, id: id, model: model, tok: tok)
-    }
 
     private func accumulate(_ byModel: inout [String: ModelTokens]?, model: String, tok: ModelTokens) {
         var m = byModel ?? [:]
