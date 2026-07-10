@@ -2,6 +2,7 @@ import Foundation
 
 enum OAuthError: Error, Sendable {
     case unauthorized          // 401 — token expired/invalid, try refresh
+    case rateLimited(retryAfter: TimeInterval?)  // 429 — carries Retry-After when present
     case http(Int)
     case badResponse
     case decode
@@ -40,8 +41,25 @@ enum OAuthClient {
         switch http.statusCode {
         case 200: return data
         case 401: throw OAuthError.unauthorized
+        case 429:
+            throw OAuthError.rateLimited(retryAfter: retryAfterSeconds(http))
         default: throw OAuthError.http(http.statusCode)
         }
+    }
+
+    /// Seconds to wait per the response, from `Retry-After` (delta-seconds or an HTTP-date).
+    /// Anthropic 429s set it; nil when absent so the caller falls back to its own backoff.
+    private static func retryAfterSeconds(_ resp: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = resp.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if let secs = TimeInterval(raw) { return max(0, secs) }   // delta-seconds form
+        // HTTP-date form (rare here): convert to a delay from now.
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(identifier: "GMT")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = fmt.date(from: raw) else { return nil }
+        return max(0, date.timeIntervalSinceNow)
     }
 
     // MARK: - Usage
