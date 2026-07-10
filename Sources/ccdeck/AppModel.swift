@@ -401,8 +401,19 @@ final class AppModel {
     // MARK: - Polling
 
     func refreshAll() async {
-        for account in accounts {
-            await refresh(account)
+        for (i, account) in accounts.enumerated() {
+            // Space accounts out so the poll doesn't burst the per-IP usage limit (the
+            // same failure the cold-start stagger avoids), then give a rate-limited
+            // account a couple of quick retries — honoring Retry-After — so a transient
+            // 429 clears on its own instead of showing "Fetch failed" for the full 30s.
+            if i > 0 { try? await Task.sleep(for: .seconds(RetryPolicy.pollStagger)) }
+            var result = await refresh(account)
+            var attempt = 1
+            while case let .retriable(after) = result, attempt <= RetryPolicy.pollMaxRetries {
+                try? await Task.sleep(for: .seconds(RetryPolicy.pollDelay(retryAfter: after, attempt: attempt)))
+                result = await refresh(account)
+                attempt += 1
+            }
         }
         lastRefresh = Date()
         autoSwitchIfNeeded()
@@ -636,11 +647,16 @@ final class AppModel {
         }
     }
 
-    private func refresh(_ account: Account) async {
+    /// Outcome of one usage fetch, so the poll can decide whether to retry the account.
+    /// `.retriable` carries the server's suggested wait (nil → caller backs off itself).
+    private enum FetchResult { case ok, fatal, retriable(after: TimeInterval?) }
+
+    @discardableResult
+    private func refresh(_ account: Account) async -> FetchResult {
         guard let blob = Keychain.storedBlob(email: account.email),
               var creds = OAuthCreds.parse(blob) else {
             errorByEmail[account.email] = "no stored credentials"
-            return
+            return .fatal
         }
 
         // Refresh if the token has expired (best-effort; see OAuthClient.refresh).
@@ -667,16 +683,26 @@ final class AppModel {
             usageByEmail[account.email] = usage
             errorByEmail[account.email] = nil
             persistUsage()
+            return .ok
         } catch OAuthError.unauthorized {
             errorByEmail[account.email] = "needs re-login"
+            return .fatal
+        } catch let OAuthError.rateLimited(retryAfter) {
+            // The one worth retrying quickly — a per-IP burst limit that clears in seconds.
+            errorByEmail[account.email] = "Fetch failed (429)"
+            return .retriable(after: retryAfter)
         } catch let OAuthError.http(code) {
             errorByEmail[account.email] = "Fetch failed (\(code))"
+            return code >= 500 ? .retriable(after: nil) : .fatal   // 5xx is transient; 4xx isn't
         } catch let e as URLError where e.code == .notConnectedToInternet || e.code == .networkConnectionLost {
             errorByEmail[account.email] = "Offline"
+            return .fatal                                           // next poll retries once back online
         } catch let e as URLError where e.code == .timedOut {
             errorByEmail[account.email] = "Timed out"
+            return .retriable(after: nil)
         } catch {
             errorByEmail[account.email] = "Fetch failed"
+            return .fatal
         }
     }
 
@@ -1004,7 +1030,7 @@ final class AppModel {
     }
 
     /// Soonest upcoming 7-day (weekly) reset across every account, tagged with the owning
-    /// account — for the "Weekly reset in … (Name)" hint under combined capacity.
+    /// account — for the "Weekly reset in … (Name)" tail on the combined footnote.
     var nextWeeklyReset: (date: Date, account: String)? {
         let now = Date()
         var best: (date: Date, account: String)?
