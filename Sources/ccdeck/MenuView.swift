@@ -659,7 +659,6 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
             settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
-            settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
             settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
             settingToggle("Show icon in dock", isOn: $model.showDockIcon)

@@ -75,12 +75,6 @@ final class AppModel {
             applyDockIconVisibility()
         }
     }
-    // After a switch, running `claude` processes keep the old token in memory (the CLI
-    // caches its credential per-process). Killing the Zed ACP adapter forces Zed to
-    // restart it, so the next prompt re-reads the freshly swapped Keychain entry.
-    var restartAcpOnSwitch: Bool {
-        didSet { store.setSetting("restartAcpOnSwitch", restartAcpOnSwitch ? "1" : "0") }
-    }
     // Whether the SETTINGS section is expanded. Persisted so it survives menu-bar
     // window reopens (the view's @State would reset on each recreation).
     var settingsExpanded: Bool {
@@ -131,7 +125,6 @@ final class AppModel {
         self.autoSwitchEnabled = store.getSetting("autoSwitch") == "1"
         self.showUsageInMenuBar = store.getSetting("showUsageInMenuBar") == "1"  // default off
         self.showDockIcon = store.getSetting("showDockIcon") != "0"  // default on
-        self.restartAcpOnSwitch = store.getSetting("restartAcpOnSwitch") == "1"  // default off
         self.settingsExpanded = store.getSetting("settingsExpanded") == "1"  // default off
         self.usageWindow = store.getSetting("usageWindow").flatMap(UsageWindow.init) ?? .today
         self.startAtLoginEnabled = SMAppService.mainApp.status == .enabled
@@ -748,38 +741,9 @@ final class AppModel {
             }
             activeEmail = email
             store.setSetting("activeEmail", email)
-            if restartAcpOnSwitch {
-                let killed = restartClaudeAcp()
-                statusMessage = killed
-                    ? "Switched to \(label(for: email)). Restarted Claude ACP."
-                    : "Switched to \(label(for: email)). Applies to new sessions."
-            } else {
-                statusMessage = "Switched to \(label(for: email)). Applies to new sessions."
-            }
+            statusMessage = "Switched to \(label(for: email)). Applies to new sessions."
         } catch {
             statusMessage = "Switch failed: \(error)"
-        }
-    }
-
-    /// Kill the Zed Claude Code ACP adapter so its host restarts it against the
-    /// freshly swapped credential. Equivalent to `pkill -f claude-code-acp`.
-    /// Returns true if at least one process matched.
-    @discardableResult
-    private func restartClaudeAcp() -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        // Match both adapters Zed has shipped: the older standalone `claude-code-acp`
-        // and the current `@anthropic-ai/claude-agent-sdk` binary (path contains
-        // `claude-agent-sdk`). macOS pkill treats the pattern as an extended regex,
-        // so alternation works. `-f` matches against the full argument list.
-        p.arguments = ["-f", "claude-code-acp|claude-agent-sdk"]
-        do {
-            try p.run()
-            p.waitUntilExit()
-            // pkill exits 0 when a process was signalled, 1 when none matched.
-            return p.terminationStatus == 0
-        } catch {
-            return false
         }
     }
 
