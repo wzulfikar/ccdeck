@@ -453,6 +453,13 @@ struct MenuView: View {
             if c.hasData {
                 GaugeRow(title: "5-hour", value: c.usedFiveHour, total: c.total, reset: nil)
                 GaugeRow(title: "7-day", value: c.usedSevenDay, total: c.total, reset: nil)
+                // The soonest reset across accounts (plus a weekly tail when distinct) reads
+                // as a footnote under the meters — no single reset applies to the combined bar.
+                if let next = model.nextReset {
+                    Text(resetLine(next: next, weekly: model.nextWeeklyReset))
+                        .font(.caption2)
+                        .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
+                }
             } else {
                 // Meters depend on the usage fetch (auth). Fetch failed / nothing
                 // cached / auth still in progress: keep the label so the layout is
@@ -464,14 +471,11 @@ struct MenuView: View {
             // no token data and no scan running.
             if model.tokensToday != nil || model.isScanningTokens {
                 usageSection
+                    // Top gap sets the tokens block apart from the combined meters above.
+                    .padding(.top, 6)
                     // Extra gap so the reset line below reads as its own footnote rather
                     // than part of the usage block.
                     .padding(.bottom, 12)
-            }
-            if c.hasData, let next = model.nextReset {
-                Text(resetLine(next: next, weekly: model.nextWeeklyReset))
-                    .font(.caption2)
-                    .foregroundStyle(isResetUrgent(next.date) ? .orange : .secondary)
             }
         }
     }
@@ -655,7 +659,6 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("SETTINGS").font(.caption2.bold()).foregroundStyle(.secondary)
             settingToggle("Auto-switch at \(Int(model.threshold))%", isOn: $model.autoSwitchEnabled)
-            settingToggle("Restart Claude ACP on switch", isOn: $model.restartAcpOnSwitch)
             settingToggle("Start at login", isOn: $model.startAtLoginEnabled)
             settingToggle("Show usage % in menu bar", isOn: $model.showUsageInMenuBar)
             settingToggle("Show icon in dock", isOn: $model.showDockIcon)

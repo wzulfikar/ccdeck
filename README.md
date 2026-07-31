@@ -48,6 +48,23 @@ to switch accounts to read usage.
 Quota comes from `GET https://api.anthropic.com/api/oauth/usage` (and `/api/oauth/profile`
 for the account identity), authenticated with the account's OAuth access token.
 
+## Stay awake
+
+Keeps the Mac running with the **lid closed on battery** — useful for long
+background `claude` runs. Toggle it from the menu. The screen turns off when the
+lid closes, but every process keeps running (no sleep). Under the hood it runs
+`pmset disablesleep` via a small privileged helper (a power assertion /
+`caffeinate` alone can't override clamshell sleep on battery), so the first
+enable prompts to approve the helper in **Login Items**.
+
+**Test it works:**
+
+1. Enable Stay awake, then unplug power.
+2. Play some music, close the lid.
+3. Music keeps playing → working. (Screen is off, processes keep running.)
+4. Disable Stay awake, play music, close the lid.
+5. Music stops → sleep behaves normally again.
+
 ## Limitations
 
 - **Switching affects new sessions only.** A running `claude` process already holds its
