@@ -891,6 +891,12 @@ final class AppModel {
             statusMessage = "No Claude Code login found in Keychain."
             return
         }
+        // The live entry was just replaced by whoever logged in, so its ACL is whatever
+        // that writer left behind. `claude auth login` leaves a good one; a capture that
+        // follows some other path may not. We're past any prompt ourselves (the blob read
+        // above succeeded), so this is the moment to check. Silent no-op when the trust is
+        // already intact; best-effort otherwise — failing only means the prompts continue.
+        Keychain.trustSecurityTool()
         do {
             let profile = try await OAuthClient.fetchProfile(accessToken: creds.accessToken)
             try Keychain.storeBlob(email: profile.email, blob: blob)

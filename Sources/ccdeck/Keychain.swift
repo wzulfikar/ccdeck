@@ -3,6 +3,27 @@ import Security
 
 enum KeychainError: Error { case status(OSStatus) }
 
+/// Hex is how Keychain ACL entries carry a partition list; see `Keychain.decodePartitions`.
+extension Data {
+    init?(hexEncoded hex: String) {
+        guard hex.count.isMultiple(of: 2) else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(hex.count / 2)
+        var i = hex.startIndex
+        while i < hex.endIndex {
+            let next = hex.index(i, offsetBy: 2)
+            guard let byte = UInt8(hex[i..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            i = next
+        }
+        self.init(bytes)
+    }
+
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// Generic-password Keychain access.
 ///
 /// Two services are in play:
@@ -77,6 +98,17 @@ enum Keychain {
     /// necessarily starts a fresh ACL).
     @discardableResult
     static func updatePreservingACL(service: String, account: String, value: String) -> Bool {
+        guard let keychainItem = legacyItem(service: service, account: account) else { return false }
+        let data = Data(value.utf8)
+        let status = data.withUnsafeBytes { raw in
+            SecKeychainItemModifyContent(keychainItem, nil, UInt32(data.count), raw.baseAddress)
+        }
+        return status == errSecSuccess
+    }
+
+    /// The legacy `SecKeychainItem` handle for an item, or nil when it doesn't exist
+    /// (or lives in the modern data-protection keychain, which has no editable ACL).
+    private static func legacyItem(service: String, account: String) -> SecKeychainItem? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -86,14 +118,9 @@ enum Keychain {
         ]
         var ref: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess,
-              let item = ref, CFGetTypeID(item) == SecKeychainItemGetTypeID() else { return false }
+              let item = ref, CFGetTypeID(item) == SecKeychainItemGetTypeID() else { return nil }
         // Safe: the type-id check above confirms this is a legacy SecKeychainItem.
-        let keychainItem = item as! SecKeychainItem
-        let data = Data(value.utf8)
-        let status = data.withUnsafeBytes { raw in
-            SecKeychainItemModifyContent(keychainItem, nil, UInt32(data.count), raw.baseAddress)
-        }
-        return status == errSecSuccess
+        return (item as! SecKeychainItem)
     }
 
     static func delete(service: String, account: String) {
@@ -103,6 +130,144 @@ enum Keychain {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    // MARK: - Trust (ACL + partition list)
+
+    /// Claude Code does not read the Keychain in-process — it shells out to
+    /// `/usr/bin/security find-generic-password -s "Claude Code-credentials"`. So the
+    /// principal the ACL has to trust is the `security` tool, and each read is its own
+    /// short-lived process: with N sessions live (Zed agent threads, terminals, the
+    /// mobile bridge), one untrusted item means N consecutive
+    /// "security wants to access key" dialogs, not one.
+    static let securityToolPath = "/usr/bin/security"
+
+    /// Since 10.11 the trusted-app list is only half the check — the caller's partition
+    /// must also be listed. `/usr/bin/security` is an Apple-signed command-line tool, so
+    /// it needs `apple-tool:`, which is exactly what the entry Claude Code creates
+    /// already carries. An item created by a *team-signed* app instead gets only
+    /// `teamid:<ours>` — that's the state our `SecItemAdd` fallback would leave behind.
+    ///
+    /// Deliberately minimal: `apple:` (any Apple-signed app) and `teamid:Q6L2SF6YDW`
+    /// (Anthropic-signed binaries, for a future in-process read) would both widen who
+    /// can read the token silently, and neither is needed today.
+    static let requiredPartitions = ["apple-tool:"]
+
+    enum TrustOutcome: Equatable {
+        case alreadyTrusted
+        case granted
+        case failed(OSStatus)
+    }
+
+    /// Ensure the live entry trusts `/usr/bin/security` — both in the decrypt ACL entry's
+    /// application list and in the partition list — so Claude Code's reads stay silent.
+    ///
+    /// Repair, not setup. An entry created by `security add-generic-password` (what
+    /// `claude auth login` uses) already trusts the tool and carries `apple-tool:`; the
+    /// state that breaks it is *us* creating the entry, since `SecItemAdd` from a
+    /// team-signed app yields an ACL trusting only ccdeck and partitions `teamid:<ours>`.
+    /// Every live session then re-prompts on its next poll, which is why the dialog
+    /// arrives ten-deep rather than once.
+    ///
+    /// Editing an ACL is itself privileged (the ChangeACL entry trusts no app), so a call
+    /// that actually changes something raises one keychain-password prompt. That is the
+    /// trade: one prompt once, instead of one per live session on every switch.
+    ///
+    /// Idempotent — returns `.alreadyTrusted` without touching the item, and therefore
+    /// without prompting, when nothing is missing.
+    @discardableResult
+    static func trustSecurityTool(service: String = officialService,
+                                  account: String? = nil) -> TrustOutcome {
+        guard let item = legacyItem(service: service, account: account ?? officialAccount) else {
+            return .failed(errSecItemNotFound)
+        }
+
+        var accessRef: SecAccess?
+        let accessStatus = SecKeychainItemCopyAccess(item, &accessRef)
+        guard accessStatus == errSecSuccess, let access = accessRef else { return .failed(accessStatus) }
+
+        var listRef: CFArray?
+        let listStatus = SecAccessCopyACLList(access, &listRef)
+        guard listStatus == errSecSuccess, let acls = listRef as? [SecACL] else { return .failed(listStatus) }
+
+        var toolRef: SecTrustedApplication?
+        let toolStatus = SecTrustedApplicationCreateFromPath(securityToolPath, &toolRef)
+        guard toolStatus == errSecSuccess, let tool = toolRef,
+              let toolData = trustedAppData(tool) else { return .failed(toolStatus) }
+
+        var changed = false
+        for acl in acls {
+            let auths = (SecACLCopyAuthorizations(acl) as? [String]) ?? []
+            if auths.contains(kSecACLAuthorizationPartitionID as String) {
+                if addRequiredPartitions(to: acl) { changed = true }
+            } else if auths.contains(kSecACLAuthorizationDecrypt as String) {
+                if trust(tool, data: toolData, in: acl) { changed = true }
+            }
+        }
+
+        guard changed else { return .alreadyTrusted }
+        let setStatus = SecKeychainItemSetAccess(item, access)
+        return setStatus == errSecSuccess ? .granted : .failed(setStatus)
+    }
+
+    /// Append `tool` to one ACL entry's trusted-app list. Returns false when nothing
+    /// changed — already present, unreadable, or an unrestricted entry (a nil app list
+    /// means "any application", which already covers us).
+    private static func trust(_ tool: SecTrustedApplication, data toolData: Data,
+                              in acl: SecACL) -> Bool {
+        var appsRef: CFArray?
+        var descRef: CFString?
+        var prompt = SecKeychainPromptSelector()
+        guard SecACLCopyContents(acl, &appsRef, &descRef, &prompt) == errSecSuccess,
+              let apps = appsRef as? [SecTrustedApplication] else { return false }
+        guard !apps.contains(where: { trustedAppData($0) == toolData }) else { return false }
+        let updated = (apps + [tool]) as CFArray
+        return SecACLSetContents(acl, updated, descRef ?? "" as CFString, prompt) == errSecSuccess
+    }
+
+    /// Merge `requiredPartitions` into the partition ACL entry.
+    ///
+    /// No entry means partitions aren't enforced on this item at all, so there is
+    /// nothing to repair — we never synthesise one (that would only narrow access).
+    private static func addRequiredPartitions(to acl: SecACL) -> Bool {
+        var appsRef: CFArray?
+        var descRef: CFString?
+        var prompt = SecKeychainPromptSelector()
+        guard SecACLCopyContents(acl, &appsRef, &descRef, &prompt) == errSecSuccess else { return false }
+
+        let current = decodePartitions(descRef as String?)
+        let merged = current + requiredPartitions.filter { !current.contains($0) }
+        guard merged.count != current.count, let encoded = encodePartitions(merged) else { return false }
+        return SecACLSetContents(acl, appsRef, encoded as CFString, prompt) == errSecSuccess
+    }
+
+    private static func trustedAppData(_ app: SecTrustedApplication) -> Data? {
+        var data: CFData?
+        guard SecTrustedApplicationCopyData(app, &data) == errSecSuccess else { return nil }
+        return data as Data?
+    }
+
+    /// Partition ids out of the partition ACL entry's description.
+    ///
+    /// The description is not the plist itself — it is the plist's bytes rendered as a
+    /// lowercase hex string (verified against the live `Claude Code-credentials` entry,
+    /// which decodes to `{Partitions: ["apple-tool:"]}`). Writing raw XML there produces
+    /// an entry the Security framework silently ignores, so both hops matter.
+    ///
+    /// Empty for a nil/absent/non-hex/malformed description; callers treat that as
+    /// "nothing to merge into" and leave the entry alone.
+    static func decodePartitions(_ description: String?) -> [String] {
+        guard let hex = description, let data = Data(hexEncoded: hex),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any],
+              let partitions = dict["Partitions"] as? [String] else { return [] }
+        return partitions
+    }
+
+    static func encodePartitions(_ partitions: [String]) -> String? {
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: ["Partitions": partitions],
+                                                             format: .xml, options: 0) else { return nil }
+        return data.hexEncodedString()
     }
 
     // MARK: - High level
@@ -151,5 +316,9 @@ enum Keychain {
         if !updatePreservingACL(service: officialService, account: officialAccount, value: blob) {
             try write(service: officialService, account: officialAccount, value: blob)
         }
+        // Cheap and silent when the trust is already intact (the common path, since
+        // `updatePreservingACL` keeps it). It earns its keep after the `write` fallback
+        // above, which leaves an entry only ccdeck can read.
+        trustSecurityTool()
     }
 }
