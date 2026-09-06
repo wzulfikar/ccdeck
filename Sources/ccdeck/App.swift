@@ -125,8 +125,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     /// The status message is transient flash feedback (e.g. "Captured: …"),
     /// so wipe it when the popover closes — it shouldn't linger on reopen.
+    /// A revealed email is transient the same way: reopening starts masked again.
     nonisolated func popoverDidClose(_ notification: Notification) {
-        Task { @MainActor in model.statusMessage = "" }
+        Task { @MainActor in
+            model.statusMessage = ""
+            model.emailRevealed = false
+        }
     }
 
     // MARK: - Status icon

@@ -65,6 +65,9 @@ final class AppModel {
     private(set) var activeEmail: String?
     private(set) var lastRefresh: Date?
     var statusMessage: String = ""
+    /// Whether the active account's email is currently unmasked. Lives here (not in the
+    /// view) so closing the popover can reset it — reopening always starts hidden.
+    var emailRevealed = false
 
     // Settings.
     var autoSwitchEnabled: Bool {

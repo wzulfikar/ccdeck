@@ -349,15 +349,32 @@ struct MenuView: View {
             }
 
             if isActive {
-                // Active account shows its email here (where the % would be); the
-                // per-window percentages live in the inline meters just below.
-                // Click to copy — flashes "email copied ✓" for 2s.
-                Text(copiedEmail == acct.email ? "email copied ✓" : acct.email)
-                    .font(.caption2)
-                    .foregroundStyle(copiedEmail == acct.email ? Color.green : Color.secondary)
-                    .lineLimit(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture { copyEmail(acct.email) }
+                // The active account's slot (where the % would be) holds the email,
+                // masked by default: "Show email" reveals it, tapping the revealed
+                // email hides it again, and the copy icon beside it copies — flashing
+                // "email copied ✓" for 2s. The reveal resets when the popover closes.
+                if copiedEmail == acct.email {
+                    Text("email copied ✓")
+                        .font(.caption2).foregroundStyle(Color.green).lineLimit(1)
+                } else if model.emailRevealed {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.on.square")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                            .help("Copy email")
+                            .onTapGesture { copyEmail(acct.email) }
+                        Text(acct.email)
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            .contentShape(Rectangle())
+                            .help("Hide email")
+                            .onTapGesture { model.emailRevealed = false }
+                    }
+                } else {
+                    Text("Show email")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.emailRevealed = true }
+                }
             } else if let u = model.usageByEmail[acct.email] {
                 // Weekly-exhausted accounts read 100% (orange); otherwise 5h usage,
                 // which an idle window reads as 0%. Pairs with the reset above.
