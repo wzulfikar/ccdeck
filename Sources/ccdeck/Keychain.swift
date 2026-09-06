@@ -1,7 +1,45 @@
-import Foundation
+ import Foundation
 import Security
 
-enum KeychainError: Error { case status(OSStatus) }
+enum KeychainError: Error {
+    case status(OSStatus)
+    /// `/usr/bin/security` exited non-zero. Carries its stderr, which names the real
+    /// problem (locked keychain, denied access, bad argument) — without it a failed
+    /// switch surfaces as a bare, undiagnosable code.
+    case tool(exit: Int32, message: String)
+}
+
+extension KeychainError: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .status(let s): return "status(\(s))"
+        case .tool(let code, let message):
+            return message.isEmpty ? "security exited \(code)" : "security: \(message)"
+        }
+    }
+}
+
+/// Hex is how the secret is handed to `security add-generic-password -X`; see
+/// `SecurityTool.write`.
+extension Data {
+    init?(hexEncoded hex: String) {
+        guard hex.count.isMultiple(of: 2) else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(hex.count / 2)
+        var i = hex.startIndex
+        while i < hex.endIndex {
+            let next = hex.index(i, offsetBy: 2)
+            guard let byte = UInt8(hex[i..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            i = next
+        }
+        self.init(bytes)
+    }
+
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 /// Generic-password Keychain access.
 ///
@@ -58,44 +96,6 @@ enum Keychain {
         }
     }
 
-    /// Update an existing generic-password item's data **in place**, preserving its
-    /// Keychain ACL (the list of apps trusted to read it without a prompt).
-    ///
-    /// `SecItemUpdate` rewrites the item's access object as a side effect, dropping
-    /// every app but the writer from the trust list — so after a switch `claude`
-    /// re-prompts on its next keychain read (the new-chat "allow" dance). The legacy
-    /// `SecKeychainItemModifyContent` edits the data of the existing item without
-    /// touching its `SecAccess`, so Claude Code's own trust survives and the read
-    /// stays silent.
-    ///
-    /// Login-keychain only by design: the item Claude Code writes lives there, and
-    /// only the legacy file-based keychain has a per-app trusted-app ACL. The modern
-    /// data-protection keychain gates access by code-signing, not a runtime list, so
-    /// there is nothing to preserve — hence the deprecated `SecKeychain*` calls.
-    ///
-    /// Returns false when no matching item exists (caller falls back to an add, which
-    /// necessarily starts a fresh ACL).
-    @discardableResult
-    static func updatePreservingACL(service: String, account: String, value: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var ref: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess,
-              let item = ref, CFGetTypeID(item) == SecKeychainItemGetTypeID() else { return false }
-        // Safe: the type-id check above confirms this is a legacy SecKeychainItem.
-        let keychainItem = item as! SecKeychainItem
-        let data = Data(value.utf8)
-        let status = data.withUnsafeBytes { raw in
-            SecKeychainItemModifyContent(keychainItem, nil, UInt32(data.count), raw.baseAddress)
-        }
-        return status == errSecSuccess
-    }
-
     static func delete(service: String, account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -105,11 +105,110 @@ enum Keychain {
         SecItemDelete(query as CFDictionary)
     }
 
+    // MARK: - The `security` tool
+
+    /// Read/write the *live* Claude Code entry by shelling out to `/usr/bin/security`,
+    /// exactly as Claude Code itself does.
+    ///
+    /// Not a style choice — it is the only way to leave the item's ACL alone.
+    /// Every in-process write path rewrites the item's **partition list** to the
+    /// calling code's own identity: `SecItemUpdate` does it, and so does the legacy
+    /// `SecKeychainItemModifyContent` (which preserves the trusted-app list, so the
+    /// damage is invisible in Keychain Access — that UI shows only the app list).
+    /// Verified on a scratch item: a partition of `["apple-tool:"]` came back as
+    /// `["cdhash:<writer>"]` after a modify.
+    ///
+    /// Since 10.11 a silent read needs *both* the trusted-app list and the partition
+    /// list to admit the caller, so a clobbered partition locks out
+    /// `/usr/bin/security` — which is the process Claude Code shells out to on every
+    /// credential read. Each live session (Zed agent threads, terminals) then raises
+    /// its own "security wants to access key" dialog on its next poll, and they
+    /// outlive ccdeck because they belong to the `claude` processes, not to us.
+    ///
+    /// Letting `security` do the write sidesteps all of it: the partition it stamps is
+    /// its own, `apple-tool:`, which is exactly what the entry needs. That also makes
+    /// the write self-healing for entries an earlier ccdeck already broke.
+    enum SecurityTool {
+        static let path = "/usr/bin/security"
+
+        /// `security`'s exit code is the only machine-readable part; its stderr is the
+        /// only human-readable one. Both are kept — discarding stderr turns any failure
+        /// into an undiagnosable code at the call site.
+        private struct Output {
+            let code: Int32
+            let stdout: String
+            let stderr: String
+        }
+
+        /// Item-not-found. `security` maps `errSecItemNotFound` onto this exit code,
+        /// and it is the one failure that is not an error: it just means no login yet.
+        private static let notFound: Int32 = 44
+
+        private static func run(_ args: [String]) throws -> Output {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: path)
+            p.arguments = args
+            let out = Pipe(), err = Pipe()
+            p.standardOutput = out
+            p.standardError = err
+            // Always give it a stdin: a GUI app's own may be closed, and an inherited
+            // closed descriptor makes `security` fail in ways unrelated to the keychain.
+            let input = Pipe()
+            p.standardInput = input
+            do { try p.run() } catch {
+                throw KeychainError.tool(exit: -1, message: "could not launch \(path): \(error)")
+            }
+            try? input.fileHandleForWriting.close()
+            // Drain both before waiting: a blob larger than the pipe buffer would deadlock.
+            let outData = out.fileHandleForReading.readDataToEndOfFile()
+            let errData = err.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return Output(code: p.terminationStatus,
+                          stdout: String(decoding: outData, as: UTF8.self),
+                          stderr: String(decoding: errData, as: UTF8.self)
+                              .trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        /// nil when no such item exists. Throws when the read itself failed, so a locked
+        /// or denied keychain is not silently reported as "no login".
+        static func read(service: String, account: String) throws -> String? {
+            let r = try run(["find-generic-password", "-a", account, "-s", service, "-w"])
+            if r.code == notFound { return nil }
+            guard r.code == 0 else { throw KeychainError.tool(exit: r.code, message: r.stderr) }
+            // `-w` prints the secret and a trailing newline; the blob is JSON, so
+            // trimming newlines is lossless.
+            return r.stdout.trimmingCharacters(in: .newlines)
+        }
+
+        /// Create or replace the item. `-U` updates in place when it already exists,
+        /// so an entry Claude Code created keeps its identity and trusted-app list.
+        ///
+        /// The secret goes on the argument vector as hex, which puts it in this
+        /// process's `ps` output for the length of the call. The alternatives are worse:
+        /// `security -i` reads stdin through a ~4KB line buffer and chops a longer
+        /// command into fragments it then runs as commands of their own (the blob is
+        /// ~2KB and grows with every MCP server the user authorises, and hex doubles
+        /// it), while `-w` with no value prompts on stdin but truncates at 128 bytes.
+        /// The exposure is narrow: anything that can read our `ps` entry runs as this
+        /// user and could just as well ask `security` for the credential itself.
+        static func write(service: String, account: String, value: String) throws {
+            let hex = Data(value.utf8).hexEncodedString()
+            let r = try run(["add-generic-password", "-U",
+                            "-a", account, "-s", service, "-X", hex])
+            guard r.code == 0 else { throw KeychainError.tool(exit: r.code, message: r.stderr) }
+        }
+    }
+
     // MARK: - High level
 
     /// The credential blob Claude Code is currently using.
-    static func currentOfficialBlob() -> String? {
-        read(service: officialService, account: officialAccount)
+    ///
+    /// Via `SecurityTool` so ccdeck needs no standing in the live entry's ACL — the
+    /// item stays exactly as `claude auth login` left it. See `SecurityTool`.
+    /// Throws (rather than returning nil) when the read itself failed, so callers can
+    /// tell "not logged in" apart from "the keychain would not give it to us".
+    static func currentOfficialBlob() throws -> String? {
+        try SecurityTool.read(service: officialService, account: officialAccount)
     }
 
     /// Stored blob for a managed account.
@@ -144,12 +243,10 @@ enum Keychain {
     /// verbatim. Only affects sessions launched *after* this point.
     static func activate(email: String) throws {
         guard let blob = storedBlob(email: email) else { throw KeychainError.status(errSecItemNotFound) }
-        // Preserve the live entry's ACL so Claude Code keeps silent read access — a
-        // plain `write` (SecItemUpdate) would reset it and re-prompt on the next read.
-        // Fall back to write only when the entry doesn't exist yet (fresh machine,
-        // before Claude Code has created it), where there is no ACL to preserve.
-        if !updatePreservingACL(service: officialService, account: officialAccount, value: blob) {
-            try write(service: officialService, account: officialAccount, value: blob)
-        }
+        // `security` does the write, not us: an in-process write would stamp the entry's
+        // partition list with ccdeck's own identity and lock `/usr/bin/security` out, so
+        // every live `claude` session would prompt on its next credential read. See
+        // `SecurityTool`. Also covers the fresh-machine case — `-U` adds when absent.
+        try SecurityTool.write(service: officialService, account: officialAccount, value: blob)
     }
 }

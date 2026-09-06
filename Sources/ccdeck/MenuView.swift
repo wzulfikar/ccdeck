@@ -692,8 +692,6 @@ private struct UsageChart: View {
     var onTap: (Date?) -> Void = { _ in }
     // Bucket-start (local hour/day) the cursor is over, for the hover tooltip.
     @State private var hovered: Date?
-    // Distinct buckets, to size the daily-tick stride without counting stacked segments.
-    private var bucketCount: Int { Set(bars.map(\.date)).count }
     private static let axisFont = Font.system(size: 8)
     // Stack palette (accent first). Charts cycles it across models.
     private static let palette: [Color] = [.accentColor, .orange, .purple, .teal, .pink, .green]
@@ -834,11 +832,47 @@ private struct UsageChart: View {
                 }
             }
         } else {
-            AxisMarks(values: .stride(by: .day, count: max(1, bucketCount / 5))) { _ in
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                    .font(Self.axisFont)
+            // Explicit ticks rather than a stride derived from the data: sparse windows
+            // have far fewer buckets than days, so the old `bucketCount / 5` stride put a
+            // tick every 2 days across 30 and the labels collided into mush.
+            AxisMarks(values: dayTicks) { value in
+                AxisValueLabel {
+                    if let d = value.as(Date.self) {
+                        Text(dayLabel(d)).font(Self.axisFont)
+                    }
+                }
             }
         }
+    }
+
+    /// ~5 evenly-spaced day ticks across the pinned x-domain (the window span, not the
+    /// buckets that happen to carry usage).
+    private var dayTicks: [Date] {
+        guard let domain else { return [] }
+        let cal = Calendar.current
+        let span = cal.dateComponents([.day], from: domain.lowerBound, to: domain.upperBound).day ?? 0
+        let step = max(1, Int((Double(span) / 5).rounded(.up)))
+        var out: [Date] = []
+        var d = cal.startOfDay(for: domain.lowerBound)
+        while d < domain.upperBound {
+            out.append(d)
+            guard let next = cal.date(byAdding: .day, value: step, to: d) else { break }
+            d = next
+        }
+        return out
+    }
+
+    /// "Aug 14" on the first tick and whenever the month rolls over, bare "20" otherwise —
+    /// the month name is the widest part of the label and repeating it buys nothing.
+    private func dayLabel(_ d: Date) -> String {
+        let cal = Calendar.current
+        let ticks = dayTicks
+        let i = ticks.firstIndex { cal.isDate($0, inSameDayAs: d) }
+        let newMonth = i.map { $0 == 0 || !cal.isDate(ticks[$0 - 1], equalTo: d, toGranularity: .month) } ?? true
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = newMonth ? "MMM d" : "d"
+        return f.string(from: d)
     }
 }
 
