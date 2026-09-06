@@ -1,4 +1,4 @@
-v0.1.20 (next)
+v0.1.20
 
 - Tweak: the current account's email is now hidden behind a "Show email" label, so it isn't on screen by default (handy when sharing a screen). Click to reveal, click the email to hide it again, and click the copy icon beside it to copy. Reopening the menu bar hides it again.
 - Fix: Claude Code no longer gets logged out by ccdeck. ccdeck kept its own copy of the signed-in account's token and refreshed it when it expired — but refreshing rotates the token, which invalidated the one Claude Code was holding and forced you to sign in again. ccdeck now reads the token Claude Code has already refreshed instead of refreshing it itself. Accounts you aren't signed into are unaffected: ccdeck still refreshes those, now shortly before they expire rather than after, so their usage doesn't blank out for a poll.
