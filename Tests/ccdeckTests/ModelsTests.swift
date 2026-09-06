@@ -122,4 +122,18 @@ struct OAuthCredsTests {
         #expect(OAuthCreds.parse(future)?.isExpired == false)
         #expect(OAuthCreds.parse(noExpiry)?.isExpired == false)
     }
+
+    @Test("expiresWithin gives a lead on expiry; nil expiry never triggers")
+    func expiryLead() {
+        func blob(_ offset: TimeInterval) -> String {
+            "{\"accessToken\":\"t\",\"expiresAt\":\(Date().addingTimeInterval(offset).timeIntervalSince1970 * 1000)}"
+        }
+        // 4 minutes out is inside a 5-minute lead; an hour out is not.
+        #expect(OAuthCreds.parse(blob(240))?.expiresWithin(300) == true)
+        #expect(OAuthCreds.parse(blob(3600))?.expiresWithin(300) == false)
+        // Already expired is trivially within any lead.
+        #expect(OAuthCreds.parse(blob(-60))?.expiresWithin(300) == true)
+        // No expiry: unknowable, and reporting "expiring" would refresh on every poll.
+        #expect(OAuthCreds.parse(#"{"accessToken":"t"}"#)?.expiresWithin(300) == false)
+    }
 }

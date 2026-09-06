@@ -53,6 +53,11 @@ final class AppModel {
     private(set) var usageSummary: UsageSummary?
     // Fixed x-axis span for the chart so empty leading/trailing buckets don't shrink it.
     private(set) var usageDomain: ClosedRange<Date>?
+    // Palette slot per model display name (see `ModelColor`), so a model looks the same in
+    // every window. Claimed on first sighting and persisted, which is what stops a newly
+    // released model from bumping an existing one off its colour. The view turns slots into
+    // colours; keeping this side of the line an Int map keeps SwiftUI out of the model.
+    private(set) var modelColorSlots: [String: Int] = [:]
     // Anthropic model prices (per MTok) from models.dev, keyed by model id. Cached in the
     // Store and revalidated on launch (stale-while-revalidate). Empty until first fetch;
     // costTodayUSD stays nil while empty so the UI just omits the "~$" suffix.
@@ -137,6 +142,10 @@ final class AppModel {
         if let json = store.getSetting("usageByEmail")?.data(using: .utf8),
            let cached = try? JSONDecoder().decode([String: Usage].self, from: json) {
             self.usageByEmail = cached
+        }
+        if let json = store.getSetting("modelColorSlots")?.data(using: .utf8),
+           let cached = try? JSONDecoder().decode([String: Int].self, from: json) {
+            self.modelColorSlots = cached
         }
         self.shouldStayAwake = store.getSetting("stayAwake") == "1"  // default off
         // Restore the last token total — but only if it's from today; a value stamped
@@ -467,6 +476,26 @@ final class AppModel {
         periodInsights = store.insights(fromEpoch: epoch(start), toEpoch: epoch(end))
     }
 
+    // MARK: - Model colours
+
+    /// Give every model in `names` a palette slot, keeping the ones already recorded exactly
+    /// where they are. A newcomer takes its hashed slot, or walks to the next free one when
+    /// that slot is already claimed — so the newcomer absorbs the collision and no model on
+    /// screen ever changes colour. Claims are persisted, so this holds across launches too.
+    private func claimColorSlots(for names: [String]) {
+        let fresh = Set(names).subtracting(modelColorSlots.keys)
+        guard !fresh.isEmpty else { return }
+        var taken = Set(modelColorSlots.values)
+        for name in fresh.sorted() {       // sorted so a batch of newcomers resolves the same way
+            let slot = ModelColor.claimSlot(for: name, taken: taken)
+            taken.insert(slot)
+            modelColorSlots[name] = slot
+        }
+        if let json = try? JSONEncoder().encode(modelColorSlots), let text = String(data: json, encoding: .utf8) {
+            store.setSetting("modelColorSlots", text)
+        }
+    }
+
     // MARK: - Usage history (chart + delta)
 
     /// Rebuild `usageBars` and `usageSummary` for the selected window from the history
@@ -499,6 +528,7 @@ final class AppModel {
         let curRows = store.hourlyRows(fromEpoch: epoch(start), toEpoch: epoch(queryEnd))
         usageBars = bars(curRows, from: start, to: queryEnd, unit: unit, cal: cal)
         usageDomain = bucketStart(start, unit: unit, cal: cal)...dayAfterLast
+        claimColorSlots(for: usageBars.map { shortModelName($0.model) })
 
         let curTokens = curRows.reduce(0) { $0 + $1.tokens.total }
         let curCost = cost(curRows)
@@ -644,31 +674,15 @@ final class AppModel {
     /// `.retriable` carries the server's suggested wait (nil → caller backs off itself).
     private enum FetchResult { case ok, fatal, retriable(after: TimeInterval?) }
 
+    /// How far ahead of `expiresAt` a token ccdeck owns outright is renewed. Renewing
+    /// only once expired would spend a guaranteed-401 poll first.
+    static let refreshLead: TimeInterval = 300
+
     @discardableResult
     private func refresh(_ account: Account) async -> FetchResult {
-        guard let blob = Keychain.storedBlob(email: account.email),
-              var creds = OAuthCreds.parse(blob) else {
+        guard let creds = await usableCredentials(for: account) else {
             errorByEmail[account.email] = "no stored credentials"
             return .fatal
-        }
-
-        // Refresh if the token has expired (best-effort; see OAuthClient.refresh).
-        if creds.isExpired, let rt = creds.refreshToken {
-            if let refreshed = try? await OAuthClient.refresh(refreshToken: rt),
-               let newBlob = Self.applyRefresh(to: creds.raw,
-                                                accessToken: refreshed.accessToken,
-                                                refreshToken: refreshed.refreshToken,
-                                                expiresAt: refreshed.expiresAt) {
-                try? Keychain.storeBlob(email: account.email, blob: newBlob)
-                creds = OAuthCreds.parse(newBlob) ?? creds
-                // Deliberately do NOT push this into the live `Claude Code-credentials`
-                // entry. That refreshed token is only for our own usage fetch (stored
-                // above). Writing the official entry here (a) resets its Keychain ACL,
-                // re-prompting `security`/`claude` on every subsequent read, and
-                // (b) burns the rotating refresh token out from under Claude Code,
-                // which can force a re-login. The live entry is Claude Code's to manage;
-                // we only touch it on an explicit user switch (see `switch`/`activate`).
-            }
         }
 
         do {
@@ -697,6 +711,99 @@ final class AppModel {
             errorByEmail[account.email] = "Fetch failed"
             return .fatal
         }
+    }
+
+    /// The credential to fetch usage with, renewed first if it is at or near expiry.
+    ///
+    /// Which token family the blob belongs to decides who is allowed to renew it:
+    ///
+    ///   - The account Claude Code is logged in as shares its family with the live
+    ///     `Claude Code-credentials` entry. Refresh tokens rotate, so an exchange here
+    ///     invalidates the token Claude Code is holding and forces a re-login. Our copy
+    ///     is also written once at capture and never again, so it goes stale the moment
+    ///     Claude Code refreshes on its own. Both problems have one answer: re-read the
+    ///     live entry rather than refresh, and keep our copy in step with what we find.
+    ///   - Every other account: ccdeck is the sole holder, so renewal costs nothing.
+    ///     `activate` copies the stored blob to the live entry on switch, so Claude Code
+    ///     receives the current token rather than the one captured months ago.
+    private func usableCredentials(for account: Account) async -> OAuthCreds? {
+        guard let stored = Keychain.storedBlob(email: account.email).flatMap(OAuthCreds.parse)
+        else { return nil }
+        guard stored.expiresWithin(Self.refreshLead) else { return stored }
+
+        guard holdsLiveCredential(account) else {
+            guard let rt = stored.refreshToken else { return stored }
+            return await renew(stored, refreshToken: rt, for: account, handBackToClaudeCode: false)
+                ?? stored
+        }
+
+        // Claude Code refreshes the live entry well ahead of expiry, so the fresh token
+        // is usually already sitting there. Reading it spawns `security` (and can raise
+        // a Keychain prompt), which is why this happens near expiry rather than on every
+        // 30s poll.
+        if let liveBlob = (try? Keychain.currentOfficialBlob()) ?? nil,
+           let live = OAuthCreds.parse(liveBlob),
+           live.accessToken != stored.accessToken,
+           (live.expiresAt ?? .distantPast) > (stored.expiresAt ?? .distantPast) {
+            try? Keychain.storeBlob(email: account.email, blob: liveBlob)
+            return live
+        }
+
+        // Nothing fresher on disk — so the question is whether we may rotate a token
+        // Claude Code also holds. `ClaudeProcess.isRunning` is checked last: it spawns a
+        // process, and the cheaper conditions rule the branch out most of the time.
+        guard let rt = stored.refreshToken,
+              Self.mayRenewSharedCredential(expired: stored.isExpired,
+                                            claudeCodeRunning: ClaudeProcess.isRunning())
+        else { return stored }
+        return await renew(stored, refreshToken: rt, for: account, handBackToClaudeCode: true)
+            ?? stored
+    }
+
+    /// Whether ccdeck may rotate the refresh token of the account Claude Code is logged
+    /// in as — the one exchange that can strand another holder, so the rule is pulled out
+    /// where it can be tested directly.
+    ///
+    /// A running Claude Code refreshes on its own schedule, hours ahead of expiry, so
+    /// racing it risks each side invalidating the other's token. Once nothing is running
+    /// there is no refresher at all — the daemon exits as soon as it goes idle, so a
+    /// machine left alone over a weekend simply lets the token die and greets the user
+    /// with a re-login. Renewing only from that state, and only once actually expired
+    /// (not merely near expiry — a session may yet start and do it properly), leaves a
+    /// vanishingly small window to collide in. The caller hands the result back to the
+    /// live entry, so the rotation leaves Claude Code with a working token, not a dead one.
+    nonisolated static func mayRenewSharedCredential(expired: Bool,
+                                                     claudeCodeRunning: Bool) -> Bool {
+        expired && !claudeCodeRunning
+    }
+
+    /// Exchange a refresh token, persist the result, and — when this account owns the
+    /// live entry — write it back there too, because after a rotation our new token is
+    /// the only valid one left in the family. Returns nil when the exchange failed; the
+    /// caller then tries the stale token, which surfaces as "needs re-login" if the
+    /// server agrees it is dead.
+    private func renew(_ creds: OAuthCreds, refreshToken: String, for account: Account,
+                       handBackToClaudeCode: Bool) async -> OAuthCreds? {
+        guard let refreshed = try? await OAuthClient.refresh(refreshToken: refreshToken),
+              let newBlob = Self.applyRefresh(to: creds.raw,
+                                              accessToken: refreshed.accessToken,
+                                              refreshToken: refreshed.refreshToken,
+                                              expiresAt: refreshed.expiresAt),
+              let fresh = OAuthCreds.parse(newBlob)
+        else { return nil }
+
+        try? Keychain.storeBlob(email: account.email, blob: newBlob)
+        if handBackToClaudeCode { try? Keychain.updateOfficialBlob(newBlob) }
+        return fresh
+    }
+
+    /// Whether the live `Claude Code-credentials` entry belongs to this account.
+    /// `~/.claude.json` is the authority — it names the account Claude Code is logged in
+    /// as, and costs only a file read. `activeEmail` is the fallback for configs written
+    /// before Claude Code recorded an identity there.
+    private func holdsLiveCredential(_ account: Account) -> Bool {
+        if let email = ClaudeConfig.currentIdentity()?.email { return email == account.email }
+        return account.email == activeEmail
     }
 
     // MARK: - Switch policy
