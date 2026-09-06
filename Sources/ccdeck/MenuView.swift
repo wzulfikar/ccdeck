@@ -338,10 +338,14 @@ struct MenuView: View {
 
             Spacer()
 
-            // Switch button reveals on hover, just before the usage %, no background.
+            // Switch hint reveals on hover, just before the usage %, no background.
+            // It's a label, not a button — the whole row is the hit target (below).
             if hovered && !isActive {
-                Button("Switch") { model.switchTo(email: acct.email) }
-                    .buttonStyle(.borderless).font(.caption).foregroundStyle(.primary)
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.left.arrow.right")
+                    Text("Switch")
+                }
+                .font(.caption).foregroundStyle(Color.blue)
             }
 
             if isActive {
@@ -380,6 +384,13 @@ struct MenuView: View {
                 .buttonStyle(.borderless).foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
+        // Clicking anywhere in an inactive row switches to it. Nested targets keep
+        // their own taps (trash, the retry error text), so only the empty space and
+        // the label fall through to here.
+        .onTapGesture {
+            guard !isActive else { return }
+            model.switchTo(email: acct.email)
+        }
         .onHover { inside in
             hoveredEmail = inside ? acct.email : (hoveredEmail == acct.email ? nil : hoveredEmail)
         }

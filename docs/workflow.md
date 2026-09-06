@@ -1,10 +1,10 @@
 # ccdeck build & release workflow
 
-Three layered scripts. Each composes the one below, and each higher script has exactly one "skip the lower layer" escape hatch. Daily use is `build` (dev loop) and `release` (ship); `bundle` is the rare middle step for dmg testing.
+Four layered scripts. Each composes the one below, and each higher script has exactly one "skip the lower layer" escape hatch. Daily use is `dev` (build + relaunch loop) and `release` (ship); `build` is `dev` without the relaunch, `bundle` is the rare middle step for dmg testing.
 
 ```
-build.sh ──▶ bundle.sh ──▶ release.sh        scripts/utils/reset.sh
- (.app)      (.dmg)         (publish)      (clean slate)
+dev ──▶ build.sh ──▶ bundle.sh ──▶ release.sh        scripts/utils/reset.sh
+(loop)   (.app)      (.dmg)         (publish)      (clean slate)
 ```
 
 ## The scripts
@@ -24,6 +24,14 @@ build.sh ──▶ bundle.sh ──▶ release.sh        scripts/utils/reset.sh
 `--prod` also writes `dist/.prod-build.manifest` (version + git sha + dirty flag). This is the freshness handshake that `bundle.sh --no-build` and `release.sh --no-bundle` verify — it's what prevents "released the wrong bits" accidents.
 
 Both variants coexist in `dist/` and on your machine: separate bundle ID, Keychain service, and database mean the dev app can run right next to the installed production app without touching its data.
+
+### `./scripts/dev`
+
+The fast inner loop: dev build + relaunch in one command (~4s incremental).
+
+Sets `FAST=1`, which tells `create_app_bundle.sh` to skip two prod-only steps on `Sparkle.framework` — the arch/headers trim and the inside-out re-sign. The trim is what invalidates the framework's seal and forces the re-sign; skipping both keeps the freshly copied ad-hoc signature, which a dev build (Sparkle disabled) never uses anyway.
+
+Then it quits the running `CC Deck (dev)`, waits for the process to actually exit (opening mid-shutdown races LaunchServices with error -600), re-registers the bundle with `lsregister`, and opens it — retrying `open` once for the same race.
 
 ### `./scripts/bundle.sh [--no-build] [--no-notarize]`
 
@@ -50,7 +58,8 @@ Two reliability changes vs. the old release.sh:
 ## Daily operation
 
 ```bash
-./scripts/build.sh            # iterate: open "dist/CC Deck (dev).app"
+./scripts/dev                 # iterate: dev build + relaunch (also: .work/dev)
+./scripts/build.sh            # dev build only: open "dist/CC Deck (dev).app"
 ./scripts/release.sh          # ship: patch bump, full pipeline
 ./scripts/release.sh v0.2.0   # ship a specific version
 ./scripts/release.sh --dry-run   # sanity-check what a release would do
