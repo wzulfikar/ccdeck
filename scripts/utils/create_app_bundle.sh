@@ -211,7 +211,9 @@ fi
 # the framework from ~3.0M to ~1.4M. Must run BEFORE the codesign pass below, since
 # every edit invalidates the framework's existing seal (we re-sign it afterwards).
 # Override the kept arch with SPARKLE_ARCH=x86_64 (or set SPARKLE_NO_TRIM=1 to skip).
-if [ -n "$APP_FRAMEWORK" ] && [ -z "${SPARKLE_NO_TRIM:-}" ]; then
+# FAST=1 (scripts/dev) skips the trim too: trimming invalidates the framework seal
+# and forces the slow inside-out re-sign below, which a dev build does not need.
+if [ -n "$APP_FRAMEWORK" ] && [ -z "${SPARKLE_NO_TRIM:-}" ] && [ -z "${FAST:-}" ]; then
     FW_V="$APP_FRAMEWORK/Versions/B"
     KEEP_ARCH="${SPARKLE_ARCH:-arm64}"
     echo "==> trimming Sparkle.framework (arch=$KEEP_ARCH, drop XPCServices + headers)"
@@ -273,7 +275,9 @@ esac
 # signed, so each must be re-signed with our identity (hardened runtime, NO --deep —
 # --deep applies one requirement to all nested code and breaks Sparkle) BEFORE the
 # framework, which is signed before the helper and app that enclose it.
-if [ -n "$APP_FRAMEWORK" ]; then
+if [ -n "$APP_FRAMEWORK" ] && [ -n "${FAST:-}" ]; then
+    echo "==> FAST: keeping Sparkle.framework's existing ad-hoc signature (skip inside-out re-sign)"
+elif [ -n "$APP_FRAMEWORK" ]; then
     echo "==> codesign Sparkle.framework (inside-out)"
     FW_V="$APP_FRAMEWORK/Versions/B"
     for xpc in "$FW_V/XPCServices/Installer.xpc" "$FW_V/XPCServices/Downloader.xpc"; do

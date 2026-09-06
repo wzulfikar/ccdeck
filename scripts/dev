@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# Fast local dev loop: build the dev variant (skip Sparkle trim + inside-out
+# re-sign) then relaunch it. For a full prod build use scripts/build.sh --prod.
+set -e
+
+cd "$(dirname "$0")/.."
+
+FAST=1 ./scripts/build.sh
+
+APP="dist/CC Deck (dev).app"
+BIN="$APP/Contents/MacOS/ccdeck"
+# pgrep -f takes an ERE: the bundle name's literal parens are a capture group there
+# and would never match the real path, so swap them for "." wildcards.
+BIN_RE="$(printf '%s' "$BIN" | tr '()' '..')"
+
+# Quit the running dev app (if any), then wait for it to fully exit before
+# relaunching — opening mid-shutdown races LaunchServices (error -600).
+osascript -e 'quit app "CC Deck (dev)"' 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -f "$BIN_RE" >/dev/null 2>&1 || break
+    sleep 0.3
+done
+
+# Refresh LaunchServices registration for the freshly re-signed bundle, then open
+# (retry once — the first open can still lose the -600 race on a cold registration).
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
+open "$APP" || { sleep 0.5; open "$APP"; }
