@@ -768,7 +768,7 @@ final class AppModel {
             return
         }
 
-        let preToken = OAuthCreds.parse(Keychain.currentOfficialBlob() ?? "")?.accessToken
+        let preToken = OAuthCreds.parse((try? Keychain.currentOfficialBlob()) ?? "")?.accessToken
         let knownTokens = Set(accounts.compactMap { acct in
             Keychain.storedBlob(email: acct.email).flatMap { OAuthCreds.parse($0)?.accessToken }
         })
@@ -862,7 +862,7 @@ final class AppModel {
             while !Task.isCancelled, Date() < deadline {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self else { return }
-                guard let blob = Keychain.currentOfficialBlob(),
+                guard let blob = try? Keychain.currentOfficialBlob(),
                       let token = OAuthCreds.parse(blob)?.accessToken else { continue }
                 let isNew = token != preToken && !knownTokens.contains(token)
                 if isNew {
@@ -886,17 +886,15 @@ final class AppModel {
     /// Reads whatever Claude Code is currently logged into and saves it as a managed
     /// account (keyed by its email). Also makes it the active account.
     func captureCurrentLogin() async {
-        guard let blob = Keychain.currentOfficialBlob(),
-              let creds = OAuthCreds.parse(blob) else {
+        let blob: String?
+        do { blob = try Keychain.currentOfficialBlob() } catch {
+            statusMessage = "Couldn't read the Keychain: \(error)"
+            return
+        }
+        guard let blob, let creds = OAuthCreds.parse(blob) else {
             statusMessage = "No Claude Code login found in Keychain."
             return
         }
-        // The live entry was just replaced by whoever logged in, so its ACL is whatever
-        // that writer left behind. `claude auth login` leaves a good one; a capture that
-        // follows some other path may not. We're past any prompt ourselves (the blob read
-        // above succeeded), so this is the moment to check. Silent no-op when the trust is
-        // already intact; best-effort otherwise — failing only means the prompts continue.
-        Keychain.trustSecurityTool()
         do {
             let profile = try await OAuthClient.fetchProfile(accessToken: creds.accessToken)
             try Keychain.storeBlob(email: profile.email, blob: blob)
@@ -1031,7 +1029,7 @@ final class AppModel {
     /// launches (where `activeEmail` was restored from settings) we skip it entirely.
     private func detectActiveFromKeychain() {
         guard activeEmail == nil, !accounts.isEmpty else { return }
-        guard let live = Keychain.currentOfficialBlob(),
+        guard let live = try? Keychain.currentOfficialBlob(),
               let liveCreds = OAuthCreds.parse(live) else { return }
         for account in accounts {
             if let blob = Keychain.storedBlob(email: account.email),
