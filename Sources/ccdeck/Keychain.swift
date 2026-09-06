@@ -19,8 +19,8 @@ extension KeychainError: CustomStringConvertible {
     }
 }
 
-/// Hex is how the secret is handed to `security add-generic-password -X`, keeping it
-/// off the argument vector; see `SecurityTool.write`.
+/// Hex is how the secret is handed to `security add-generic-password -X`; see
+/// `SecurityTool.write`.
 extension Data {
     init?(hexEncoded hex: String) {
         guard hex.count.isMultiple(of: 2) else { return nil }
@@ -131,14 +131,6 @@ enum Keychain {
     enum SecurityTool {
         static let path = "/usr/bin/security"
 
-        /// Quote for `security -i`'s command parser (whitespace-separated, honours
-        /// double quotes). Only service/account go through here; the secret travels as
-        /// hex, which needs no quoting.
-        private static func quote(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
-                     .replacingOccurrences(of: "\"", with: "\\\"") + "\""
-        }
-
         /// `security`'s exit code is the only machine-readable part; its stderr is the
         /// only human-readable one. Both are kept — discarding stderr turns any failure
         /// into an undiagnosable code at the call site.
@@ -152,23 +144,20 @@ enum Keychain {
         /// and it is the one failure that is not an error: it just means no login yet.
         private static let notFound: Int32 = 44
 
-        /// Commands are fed on stdin rather than argv so the secret never appears in
-        /// `ps` output.
-        private static func run(stdin: String?, _ args: [String]) throws -> Output {
+        private static func run(_ args: [String]) throws -> Output {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: path)
             p.arguments = args
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
-            // Always give it a stdin: a GUI app's own stdin may be closed, and `-i`
-            // would then read EOF immediately and do nothing.
+            // Always give it a stdin: a GUI app's own may be closed, and an inherited
+            // closed descriptor makes `security` fail in ways unrelated to the keychain.
             let input = Pipe()
             p.standardInput = input
             do { try p.run() } catch {
                 throw KeychainError.tool(exit: -1, message: "could not launch \(path): \(error)")
             }
-            try? input.fileHandleForWriting.write(contentsOf: Data((stdin ?? "").utf8))
             try? input.fileHandleForWriting.close()
             // Drain both before waiting: a blob larger than the pipe buffer would deadlock.
             let outData = out.fileHandleForReading.readDataToEndOfFile()
@@ -183,7 +172,7 @@ enum Keychain {
         /// nil when no such item exists. Throws when the read itself failed, so a locked
         /// or denied keychain is not silently reported as "no login".
         static func read(service: String, account: String) throws -> String? {
-            let r = try run(stdin: nil, ["find-generic-password", "-a", account, "-s", service, "-w"])
+            let r = try run(["find-generic-password", "-a", account, "-s", service, "-w"])
             if r.code == notFound { return nil }
             guard r.code == 0 else { throw KeychainError.tool(exit: r.code, message: r.stderr) }
             // `-w` prints the secret and a trailing newline; the blob is JSON, so
@@ -193,15 +182,20 @@ enum Keychain {
 
         /// Create or replace the item. `-U` updates in place when it already exists,
         /// so an entry Claude Code created keeps its identity and trusted-app list.
+        ///
+        /// The secret goes on the argument vector as hex, which puts it in this
+        /// process's `ps` output for the length of the call. The alternatives are worse:
+        /// `security -i` reads stdin through a ~4KB line buffer and chops a longer
+        /// command into fragments it then runs as commands of their own (the blob is
+        /// ~2KB and grows with every MCP server the user authorises, and hex doubles
+        /// it), while `-w` with no value prompts on stdin but truncates at 128 bytes.
+        /// The exposure is narrow: anything that can read our `ps` entry runs as this
+        /// user and could just as well ask `security` for the credential itself.
         static func write(service: String, account: String, value: String) throws {
             let hex = Data(value.utf8).hexEncodedString()
-            let command = "add-generic-password -U -a \(quote(account)) -s \(quote(service)) -X \(hex)\n"
-            let r = try run(stdin: command, ["-i"])
-            // `-i` reports per-command failures on stderr while still exiting 0, so the
-            // exit code alone is not enough to call this a success.
-            guard r.code == 0, r.stderr.isEmpty else {
-                throw KeychainError.tool(exit: r.code, message: r.stderr)
-            }
+            let r = try run(["add-generic-password", "-U",
+                            "-a", account, "-s", service, "-X", hex])
+            guard r.code == 0 else { throw KeychainError.tool(exit: r.code, message: r.stderr) }
         }
     }
 

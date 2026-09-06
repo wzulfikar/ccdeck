@@ -25,11 +25,12 @@ struct KeychainSecurityToolTests {
         #expect(try Keychain.SecurityTool.read(service: Self.service, account: Self.account) == value)
     }
 
-    /// The real blob is ~2KB and grows with every MCP server the user authorises, which
-    /// is what broke the first version of this: it fed the command to `security -i`,
-    /// whose ~4KB line buffer split the hex and ran the tail as a command. Anything
-    /// comfortably past that boundary pins the regression.
-    @Test("Round-trips a blob far larger than security -i's line buffer")
+    /// The real blob is ~2KB and grows with every MCP server the user authorises, and
+    /// hex doubles it — so it sits right on the ~4KB line buffer that `security -i`
+    /// reads stdin through. Feeding the command that way (the first version of this)
+    /// chopped the hex and ran the tail as a command of its own, which is why `write`
+    /// passes arguments directly. Anything comfortably past that boundary pins it.
+    @Test("Round-trips a blob past the line length that broke security -i")
     func roundTripsLargeBlob() throws {
         let service = "ccdeck-test-large-\(UUID().uuidString)"
         let servers = (0..<200).map { #""server\#($0)":{"accessToken":"tok-\#($0)"}"# }
@@ -50,7 +51,7 @@ struct KeychainSecurityToolTests {
 
     // MARK: - Hex
 
-    /// The secret reaches `security` as hex via `-X`, so it never lands in `ps` output.
+    /// The secret reaches `security` as hex via `-X`; see `SecurityTool.write`.
 
     @Test("Hex round-trips arbitrary bytes")
     func hexRoundTrip() {
