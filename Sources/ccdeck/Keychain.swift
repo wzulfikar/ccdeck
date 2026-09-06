@@ -239,14 +239,20 @@ enum Keychain {
         delete(service: appService, account: identityAccount(email))
     }
 
+    /// Replace the blob in the live Claude Code entry.
+    ///
+    /// `security` does the write, not us: an in-process write would stamp the entry's
+    /// partition list with ccdeck's own identity and lock `/usr/bin/security` out, so
+    /// every live `claude` session would prompt on its next credential read. See
+    /// `SecurityTool`. Also covers the fresh-machine case — `-U` adds when absent.
+    static func updateOfficialBlob(_ blob: String) throws {
+        try SecurityTool.write(service: officialService, account: officialAccount, value: blob)
+    }
+
     /// Activate an account: copy its stored blob into the live Claude Code entry,
     /// verbatim. Only affects sessions launched *after* this point.
     static func activate(email: String) throws {
         guard let blob = storedBlob(email: email) else { throw KeychainError.status(errSecItemNotFound) }
-        // `security` does the write, not us: an in-process write would stamp the entry's
-        // partition list with ccdeck's own identity and lock `/usr/bin/security` out, so
-        // every live `claude` session would prompt on its next credential read. See
-        // `SecurityTool`. Also covers the fresh-machine case — `-U` adds when absent.
-        try SecurityTool.write(service: officialService, account: officialAccount, value: blob)
+        try updateOfficialBlob(blob)
     }
 }

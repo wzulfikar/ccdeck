@@ -349,15 +349,32 @@ struct MenuView: View {
             }
 
             if isActive {
-                // Active account shows its email here (where the % would be); the
-                // per-window percentages live in the inline meters just below.
-                // Click to copy — flashes "email copied ✓" for 2s.
-                Text(copiedEmail == acct.email ? "email copied ✓" : acct.email)
-                    .font(.caption2)
-                    .foregroundStyle(copiedEmail == acct.email ? Color.green : Color.secondary)
-                    .lineLimit(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture { copyEmail(acct.email) }
+                // The active account's slot (where the % would be) holds the email,
+                // masked by default: "Show email" reveals it, tapping the revealed
+                // email hides it again, and the copy icon beside it copies — flashing
+                // "email copied ✓" for 2s. The reveal resets when the popover closes.
+                if copiedEmail == acct.email {
+                    Text("email copied ✓")
+                        .font(.caption2).foregroundStyle(Color.green).lineLimit(1)
+                } else if model.emailRevealed {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.on.square")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                            .help("Copy email")
+                            .onTapGesture { copyEmail(acct.email) }
+                        Text(acct.email)
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            .contentShape(Rectangle())
+                            .help("Hide email")
+                            .onTapGesture { model.emailRevealed = false }
+                    }
+                } else {
+                    Text("Show email")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.emailRevealed = true }
+                }
             } else if let u = model.usageByEmail[acct.email] {
                 // Weekly-exhausted accounts read 100% (orange); otherwise 5h usage,
                 // which an idle window reads as 0%. Pairs with the reset above.
@@ -532,7 +549,8 @@ struct MenuView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { model.toggleInsights() }
             } else {
-                UsageChart(bars: model.usageBars, unit: model.usageBarUnit, domain: model.usageDomain, onTap: usageChartTapped)
+                UsageChart(bars: model.usageBars, unit: model.usageBarUnit, domain: model.usageDomain,
+                           colorSlots: model.modelColorSlots, onTap: usageChartTapped)
                     .frame(height: 90)
                     // Gap so the chart reads as its own block, not glued to the header row.
                     .padding(.top, 14)
@@ -699,20 +717,23 @@ private struct UsageChart: View {
     let bars: [UsageBar]
     let unit: Calendar.Component
     let domain: ClosedRange<Date>?
+    // Persistent per-model palette slots from `AppModel`; a model absent from it (drawn
+    // before its slot is recorded) falls back to its hashed colour.
+    let colorSlots: [String: Int]
     // Called on a plot tap with the bucket under the cursor (nil off-plot / empty).
     var onTap: (Date?) -> Void = { _ in }
     // Bucket-start (local hour/day) the cursor is over, for the hover tooltip.
     @State private var hovered: Date?
     private static let axisFont = Font.system(size: 8)
-    // Stack palette (accent first). Charts cycles it across models.
-    private static let palette: [Color] = [.accentColor, .orange, .purple, .teal, .pink, .green]
 
     // Sorted, de-duped display names — a stable domain so a model keeps the same colour
     // across the chart, legend, and tooltip regardless of which bucket it first appears in.
     private var models: [String] { Array(Set(bars.map { shortModelName($0.model) })).sorted() }
-    private var colors: [Color] { models.indices.map { Self.palette[$0 % Self.palette.count] } }
+    // Keyed on the name, not the position, so the colour also survives switching windows
+    // (today / 7d / 30d) with a different model mix. See `ModelColor`.
+    private var colors: [Color] { models.map(color) }
     private func color(_ model: String) -> Color {
-        models.firstIndex(of: model).map { colors[$0] } ?? .accentColor
+        colorSlots[model].map(ModelColor.color(slot:)) ?? ModelColor.color(for: model)
     }
 
     var body: some View {

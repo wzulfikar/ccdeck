@@ -22,6 +22,25 @@ struct AppModelLogicTests {
         #expect(AppModel.extractLoginURL(from: "") == nil)
     }
 
+    // MARK: - mayRenewSharedCredential (who may rotate the live account's token)
+
+    @Test("Renews the shared credential only when expired and nothing is running")
+    func renewsSharedCredentialWhenAbandoned() {
+        // The weekend case: token dead, no Claude Code alive to refresh it.
+        #expect(AppModel.mayRenewSharedCredential(expired: true, claudeCodeRunning: false))
+    }
+
+    @Test("Never rotates out from under a running Claude Code")
+    func neverRacesRunningClaude() {
+        #expect(!AppModel.mayRenewSharedCredential(expired: true, claudeCodeRunning: true))
+        #expect(!AppModel.mayRenewSharedCredential(expired: false, claudeCodeRunning: true))
+    }
+
+    @Test("Waits for real expiry — a session may still start and refresh properly")
+    func waitsForExpiry() {
+        #expect(!AppModel.mayRenewSharedCredential(expired: false, claudeCodeRunning: false))
+    }
+
     // MARK: - applyRefresh (splice new tokens into the existing blob JSON)
 
     @Test("Patches tokens in a flat blob, preserving other keys")

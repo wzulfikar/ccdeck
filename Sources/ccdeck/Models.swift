@@ -50,9 +50,15 @@ struct OAuthCreds: Sendable {
         )
     }
 
-    var isExpired: Bool {
+    var isExpired: Bool { expiresWithin(0) }
+
+    /// True when the token expires within `lead` seconds. Renewing only *after* expiry
+    /// costs a guaranteed-failed fetch first, so callers that own a token outright renew
+    /// with a lead. A blob carrying no `expiresAt` never reports expiry — we cannot know,
+    /// and guessing "expired" would mean refreshing on every single poll.
+    func expiresWithin(_ lead: TimeInterval) -> Bool {
         guard let expiresAt else { return false }
-        return expiresAt <= Date()
+        return expiresAt.timeIntervalSinceNow <= lead
     }
 }
 
