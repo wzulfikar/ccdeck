@@ -815,8 +815,13 @@ private struct UsageChart: View {
 
     private func tooltipCard(bucket: Date, items: [UsageBar]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(tooltipDate(bucket)).font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(tooltipDate(bucket))
+                Spacer(minLength: 6)
+                Text(formatTokens(items.reduce(0) { $0 + $1.tokens })).monospacedDigit()
+            }
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.primary)
             ForEach(items) { item in
                 let name = shortModelName(item.model)
                 HStack(spacing: 4) {
@@ -825,6 +830,7 @@ private struct UsageChart: View {
                     Spacer(minLength: 6)
                     Text(formatTokens(item.tokens)).font(.system(size: 9).monospacedDigit())
                 }
+                .foregroundStyle(.secondary)
             }
         }
         .padding(6)
